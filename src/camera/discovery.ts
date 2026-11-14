@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto';
 import dgram from 'dgram';
+import { sleep } from '../async';
 import { elements, field } from '../events/soap';
 
 // "Find camera" (spec 2026-10-04-pi-config-design §3): one ONVIF
@@ -129,7 +130,7 @@ export async function discover(o: { timeoutMs?: number; target?: { address: stri
     const send = () => socket.send(probe, target.port, target.address, () => undefined);
     send();
     const again = setTimeout(send, Math.min(250, timeoutMs / 4));
-    await new Promise((r) => setTimeout(r, timeoutMs));
+    await sleep(timeoutMs);
     clearTimeout(again);
   } finally {
     socket.close();

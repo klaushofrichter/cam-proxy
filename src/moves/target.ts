@@ -10,7 +10,6 @@ import { cameraPasswordEnv } from '../config/password-env';
 import type { MoveCancelArgs, MoveFinishArgs, MoveOfferArgs, MoveStartArgs } from '../fleet/command-args';
 import type { Done, Handler } from '../fleet/commands';
 import { fingerprint } from '../fleet/protocol';
-import type { Config } from '../config/defaults';
 import type { SiteCa } from '../tls/ca';
 import { issueLeaf, leafOf, type Leaf } from '../tls/leaf';
 import type { PushResult } from '../tls/push';
@@ -20,7 +19,7 @@ import { failed, ok, samePlan, zeros } from './done';
 import { mergeOutcome, OUTCOME_REFUSED, outcomeOf, type ChunkKeep, type MoveOutcome } from './check';
 import { moveSourceClient, sourceGet, sourceOf } from './evaluate';
 import { chunkTotals, moveEnded, SWITCH_STEPS, type MoveJournal, type MoveRecord, type MoveTombstone, type SwitchStep } from './journal';
-import { OFFER_EXPIRY_MS } from './source';
+import { OFFER_EXPIRY_MS, type MoveRetention } from './source';
 import { keepDaysOf } from './retention';
 import { removeLanded, type Purged } from './purge';
 import { unseal } from './seal';
@@ -44,7 +43,7 @@ export interface TargetDeps {
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   // The retention in effect: finished and cancelled phases carry what ages out (keepDays); left out, they carry none.
-  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
+  retention?: () => MoveRetention;
   ca: () => SiteCa | null;
   site: () => string | undefined;
   loaded: () => Loaded;

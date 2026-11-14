@@ -56,6 +56,25 @@ describe('camera requests verified against the site CA (spec §10.4)', () => {
     }
   }, 120_000);
 
+  it("setTrust(undefined) goes back to the configured CA, not to no CA", async () => {
+    const ca = await siteCa(mkdtempSync(join(tmpdir(), 'camproxy-cca6-')), { site: 'g', cameraSubnet: '127.0.0.0/8', proxyAddresses: ['127.0.0.1'] });
+    const other = await siteCa(mkdtempSync(join(tmpdir(), 'camproxy-cca7-')), { site: 'g', cameraSubnet: '127.0.0.0/8', proxyAddresses: ['127.0.0.1'] });
+    const leaf = await issueLeaf(ca, { cn: 'cam3.g.internal', dns: ['cam3.g.internal'], ips: ['127.0.0.1'] });
+    const server = https.createServer({ cert: leaf.certPem, key: leaf.keyPem }, (_q, r) => r.end('{}'));
+    await new Promise<void>((r) => server.listen(0, '127.0.0.1', () => r()));
+    const host = `127.0.0.1:${(server.address() as AddressInfo).port}`;
+    try {
+      const client = new ReolinkClient({ id: 'cam3', host, protocol: 'https', tlsServername: 'cam3.g.internal', tlsCa: ca.certPem, user: 'u', password: 'p' });
+      expect(await client.cameraCertificate()).toMatchObject({ subject: 'cam3.g.internal' });
+      client.setTrust({ ca: other.certPem, servername: 'cam3.g.internal' });
+      expect(await client.cameraCertificate()).toBeNull();
+      client.setTrust(undefined);
+      expect(await client.cameraCertificate()).toMatchObject({ subject: 'cam3.g.internal' });
+    } finally {
+      server.close();
+    }
+  }, 120_000);
+
   it('a pinned camera: only the certificate with that SHA-256 is accepted, before any request byte (security review #178)', async () => {
     const ca = await siteCa(mkdtempSync(join(tmpdir(), 'camproxy-cca5-')), { site: 'g', cameraSubnet: '127.0.0.0/16', proxyAddresses: ['127.0.0.1'] });
     const a = await issueLeaf(ca, { cn: 'x', dns: ['cam3.g.internal'], ips: ['127.0.0.1'] });

@@ -5,7 +5,7 @@ import { createWriteStream, mkdirSync, unlinkSync } from 'fs';
 import net from 'net';
 import { join, posix } from 'path';
 import tls from 'tls';
-import { inCidr } from '../util/cidr';
+import { inCidr, plainIp } from '../util/cidr';
 
 // A small upload-only FTP(S) server for the camera's clip uploads. It speaks
 // what an uploader needs (login, explicit TLS, passive mode, folders, STOR)
@@ -46,7 +46,6 @@ const MAX_LINE = 4096;
 const FAILURE_WINDOW = 60_000;
 const MAX_FAILURES = 5;
 const IPV4 = /^\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}$/;
-const plainIp = (a: string | undefined) => (a ?? '').replace(/^::ffff:/, '');
 const OPEN = new Set(['USER', 'PASS', 'AUTH', 'QUIT', 'SYST', 'FEAT', 'NOOP', 'PBSZ', 'PROT', 'OPTS']);
 const KNOWN = new Set([...OPEN, 'PWD', 'XPWD', 'CWD', 'CDUP', 'MKD', 'XMKD', 'TYPE', 'MODE', 'STRU', 'PASV', 'EPSV', 'STOR', 'SIZE']);
 // The FTP password compared in constant time without hashing it: both padded
@@ -262,19 +261,27 @@ export class FtpServer extends EventEmitter {
     return posix.resolve(s.cwd, arg);
   }
 
-  // Failed logins per address in the last minute (the map is pruned as it goes).
+  // The cameras that may log in from this address (several cameras behind
+  // one address, spec 2026-10-05-multi-camera-host-design §7): those with
+  // that IP, those whose ftp.sourceSubnet holds it, and those without a known
+  // address (a host name). At least 1.
+  private camerasAt(ip: string): number {
+    const n = [...this.o.users().values()].filter((u) => (u.subnet ? inCidr(ip, u.subnet) : u.ip === undefined || u.ip === ip)).length;
+    return Math.max(1, n);
+  }
+
   // Two connections before login per address (a camera's MP4 and JPEG
-  // sessions), times the cameras configured at that address (several cameras
-  // behind one address, spec 2026-10-05-multi-camera-host-design §7).
+  // sessions), times the cameras at that address.
   private maxPreLogin(ip: string): number {
     if (this.o.maxPreLoginPerIp !== undefined) return this.o.maxPreLoginPerIp;
-    return 2 * Math.max(1, [...this.o.users().values()].filter((u) => u.ip === ip).length);
+    return 2 * this.camerasAt(ip);
   }
 
   private maxSessions(): number {
     return this.o.maxSessions ?? 4 * Math.max(1, this.o.users().size);
   }
 
+  // Failed logins per address in the last minute (the map is pruned as it goes).
   private recentFailures(ip: string): number[] {
     const now = this.now();
     for (const [k, v] of this.failures) {
@@ -324,9 +331,9 @@ export class FtpServer extends EventEmitter {
         return reply('331 Password required');
       case 'PASS':
         if (needTls && !s.secure) return reply('530 TLS required (AUTH TLS)');
-        // An address with 5 failures in the last minute is refused before the
-        // password is even compared.
-        if (this.recentFailures(ip).length >= MAX_FAILURES) {
+        // An address with 5 failures per camera there in the last minute is
+        // refused before the password is even compared.
+        if (this.recentFailures(ip).length >= MAX_FAILURES * this.camerasAt(ip)) {
           reply('421 Too many failed logins, try later');
           return void s.stream.end();
         }

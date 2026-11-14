@@ -1,4 +1,4 @@
-import type { Catalog } from './db';
+import { inTransaction, type Catalog } from './db';
 
 // External analytics results and call counts (spec 2026-09-30-analytics-design).
 export type AnalysisStatus = 'ok' | 'skipped' | 'failed';
@@ -134,14 +134,9 @@ export function countUnmapped(c: Catalog, items: { mid: string; name: string }[]
      ON CONFLICT (key) DO UPDATE SET count = count + 1, last_seen = excluded.last_seen, name = excluded.name`,
   );
   // One answer's objects count together, in one write.
-  c.db.exec('BEGIN');
-  try {
+  inTransaction(c.db, () => {
     for (const i of items) st.run(i.mid || `name:${i.name.toLowerCase()}`, i.mid, i.name, ts);
-    c.db.exec('COMMIT');
-  } catch (err) {
-    c.db.exec('ROLLBACK');
-    throw err;
-  }
+  });
 }
 
 // At most 1000 (a negative LIMIT would mean none in SQLite).

@@ -26,6 +26,11 @@ const EMPTY: FileShape = { v: 1, revision: 0, tokens: [], blocked: [] };
 const MAX_BLOCKS = 64;
 const HASH = /^sha256:[0-9a-f]{64}$/;
 
+// SHA-256 digests of this proxy's own tokens (admin, client, audit): a managed
+// token must never collide with one of them.
+export const localTokenDigests = (s: { adminToken: string; tokens: string[]; auditToken?: string | null }): Buffer[] =>
+  [s.adminToken, ...s.tokens, ...(s.auditToken ? [s.auditToken] : [])].map((x) => createHash('sha256').update(x).digest());
+
 export class TokenStore {
   private state: FileShape = EMPTY;
   private digests: { t: ManagedToken; d: Buffer }[] = [];

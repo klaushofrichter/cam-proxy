@@ -1,10 +1,11 @@
 import { createPrivateKey, createPublicKey, randomBytes, webcrypto, X509Certificate } from 'crypto';
-import { chmodSync, existsSync, mkdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
+import { chmodSync, existsSync, mkdirSync, readFileSync } from 'fs';
 import { join } from 'path';
 import { nameConstraintsDer, parseNameConstraints } from './der';
 import { sha256Pin } from './pin';
 import { x509 } from './x509';
 import { DAY } from '../time-units';
+import { writeFileAtomicSync } from '../fs-util';
 
 export const RSA = (bits: number) => ({ name: 'RSASSA-PKCS1-v1_5', hash: 'SHA-256', publicExponent: new Uint8Array([1, 0, 1]), modulusLength: bits }) as const;
 const YEAR = 365 * DAY;
@@ -46,16 +47,7 @@ const within = (ip: string, r: { address: string; prefix: number }): boolean => 
 
 // A secret file: written beside its target with O_EXCL (never through a
 // planted file or symlink), mode 600, then renamed into place.
-export function writeSecret(file: string, text: string): void {
-  const tmp = `${file}.tmp-${process.pid}-${randomBytes(4).toString('hex')}`;
-  try {
-    writeFileSync(tmp, text, { mode: 0o600, flag: 'wx' });
-    renameSync(tmp, file);
-  } catch (err) {
-    rmSync(tmp, { force: true });
-    throw err;
-  }
-}
+export const writeSecret = (file: string, text: string): void => writeFileAtomicSync(file, text, { mode: 0o600 });
 
 export function pemOfPkcs8(der: ArrayBuffer): string {
   return createPrivateKey({ key: Buffer.from(der), format: 'der', type: 'pkcs8' }).export({ type: 'pkcs8', format: 'pem' }).toString();
@@ -97,9 +89,7 @@ export async function siteCa(dir: string, o: { site: string; cameraSubnet: strin
       ],
     });
     writeSecret(keyFile, pemOfPkcs8(await webcrypto.subtle.exportKey('pkcs8', keys.privateKey)));
-    const tmp = `${pemFile}.tmp-${process.pid}`;
-    writeFileSync(tmp, cert.toString('pem') + '\n', { mode: 0o644 });
-    renameSync(tmp, pemFile);
+    writeFileAtomicSync(pemFile, cert.toString('pem') + '\n', { mode: 0o644 });
   }
   chmodSync(keyFile, 0o600);
   const certPem = readFileSync(pemFile, 'utf8');

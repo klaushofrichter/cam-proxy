@@ -31,12 +31,41 @@ export function removePasswordLine(loaded: Loaded, cam: string, now = new Date()
 
 // What is left of a camera that moved away, as seen now.
 export function leftoverItems(loaded: Loaded, cam: string, moveId: string): string[] {
-  const name = cameraPasswordEnv(cam);
   const items: string[] = [];
   if (loaded.order.includes(cam) && loaded.config.cameras[cam]?.moved === moveId) items.push('config.json entry');
-  if ((loaded.env[name] ?? '').trim() !== '') items.push(`env ${name}`);
-  if (loaded.env[`${name}_FILE`] !== undefined) items.push(`env ${name}_FILE`);
+  items.push(...passwordEnvItems(loaded.env, cameraPasswordEnv(cam)));
   return items;
+}
+
+// A password variable still in the process environment: `env NAME` when set
+// (not blank), `env NAME_FILE` when its file form is.
+export function passwordEnvItems(env: Record<string, string | undefined>, name: string): string[] {
+  return [...((env[name] ?? '').trim() !== '' ? [`env ${name}`] : []), ...(env[`${name}_FILE`] !== undefined ? [`env ${name}_FILE`] : [])];
+}
+
+// A leftovers file in data/admin/: one entry per camera (a new one replaces
+// it), the newest LEFTOVERS_MAX kept; an unreadable file reads as none.
+export class LeftoversFile<T extends { camera: string }> {
+  constructor(
+    private readonly path: string,
+    private readonly entryOk: (e: unknown) => e is T,
+    private readonly copy: (e: T) => T,
+  ) {}
+
+  protected read(): T[] {
+    try {
+      const v = JSON.parse(readFileSync(this.path, 'utf8')) as { entries?: unknown };
+      return Array.isArray(v.entries) ? v.entries.filter(this.entryOk) : [];
+    } catch {
+      return [];
+    }
+  }
+
+  // Replaces an entry of that camera; the newest LEFTOVERS_MAX stay.
+  add(entry: T): void {
+    const next = [...this.read().filter((e) => e.camera !== entry.camera), this.copy(entry)].slice(-LEFTOVERS_MAX);
+    writePrivateJson(this.path, { v: 1, entries: next });
+  }
 }
 
 const entryOk = (e: unknown): e is MoveLeftover => {
@@ -44,25 +73,9 @@ const entryOk = (e: unknown): e is MoveLeftover => {
   return !!o && typeof o.camera === 'string' && typeof o.moveId === 'string' && Array.isArray(o.items) && o.items.every((i) => typeof i === 'string');
 };
 
-export class MoveLeftovers {
-  private readonly path: string;
+export class MoveLeftovers extends LeftoversFile<MoveLeftover> {
   constructor(dataDir: string) {
-    this.path = join(dataDir, 'admin', 'move-leftovers.json');
-  }
-
-  private read(): MoveLeftover[] {
-    try {
-      const v = JSON.parse(readFileSync(this.path, 'utf8')) as { entries?: unknown };
-      return Array.isArray(v.entries) ? v.entries.filter(entryOk) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  // Replaces an entry of that camera; the newest LEFTOVERS_MAX stay.
-  add(entry: MoveLeftover): void {
-    const next = [...this.read().filter((e) => e.camera !== entry.camera), { camera: entry.camera, moveId: entry.moveId, items: [...entry.items] }].slice(-LEFTOVERS_MAX);
-    writePrivateJson(this.path, { v: 1, entries: next });
+    super(join(dataDir, 'admin', 'move-leftovers.json'), entryOk, (e) => ({ camera: e.camera, moveId: e.moveId, items: [...e.items] }));
   }
 
   // Each entry's items as they are now; entries with none left, and cameras running here again, dropped.

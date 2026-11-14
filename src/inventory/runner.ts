@@ -1,7 +1,7 @@
 import { randomBytes } from 'crypto';
 import { readdir, readFile, rm } from 'fs/promises';
 import { join, resolve, sep } from 'path';
-import type { AuditLog } from '../audit/audit-log';
+import { cmdFields, type AuditLog } from '../audit/audit-log';
 import { errorMessage, logger } from '../log';
 import { writeFileAtomic } from '../fs-util';
 import { REPAIR_MAX_AGE_MS } from './repair-caps';
@@ -290,7 +290,7 @@ export class InventoryRunner {
       } catch (err) {
         logger.error({ err: (err as Error).message, runId }, 'inventory_save_failed');
       }
-      const common = { runId, kind, outcome, requestedBy: who.requestedBy, ...(who.cmdId ? { cmdId: who.cmdId } : {}), ...(who.actor ? { actor: who.actor } : {}), ...(report.cancelledBy ? { cancelledBy: report.cancelledBy } : {}) };
+      const common = { runId, kind, outcome, requestedBy: who.requestedBy, ...cmdFields(who), ...(report.cancelledBy ? { cancelledBy: report.cancelledBy } : {}) };
       this.d.audit.write({
         action: op === 'repair' ? 'inventory-repair' : 'inventory', category: ['host'], type: [op === 'repair' ? 'change' : 'info'],
         outcome: outcome === 'ok' ? 'success' : outcome === 'failed' ? 'failure' : 'unknown',

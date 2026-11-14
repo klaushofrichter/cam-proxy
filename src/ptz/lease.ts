@@ -149,6 +149,30 @@ export class MoveLease {
     return this.queue(cmd);
   }
 
+  // The lease's current generation: any later move, stop or then changes it
+  // (a held zoom only extends the one it holds).
+  mark(): number {
+    return this.gen;
+  }
+
+  current(mark: number): boolean {
+    return mark === this.gen;
+  }
+
+  // Runs cmd in the command queue, unless the lease has moved on since mark
+  // (then it resolves false and sends nothing). Keeps the generation and
+  // sends no Stop: for work that follows a travel and yields to any action.
+  async runIf(mark: number, cmd: () => Promise<void>): Promise<boolean> {
+    if (mark !== this.gen) return false;
+    let ran = false;
+    await this.queue(async () => {
+      if (mark !== this.gen) return;
+      ran = true;
+      await cmd();
+    });
+    return ran;
+  }
+
   active(): boolean {
     return this.moving;
   }

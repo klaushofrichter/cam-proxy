@@ -3,7 +3,7 @@ import { chmodSync, mkdtempSync, readFileSync, statSync, writeFileSync } from 'f
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
-import { ShadowsLocalToken, TokenStore, TokenStoreUnusable } from '../src/fleet/token-store';
+import { localTokenDigests, ShadowsLocalToken, TokenStore, TokenStoreUnusable } from '../src/fleet/token-store';
 import { validateTokensApply } from '../src/fleet/command-args';
 import { fixtures, strict, why } from './helpers/contract';
 
@@ -157,5 +157,13 @@ describe('the local block holds (security review)', () => {
     expect(() => fresh.apply({ v: 1, revision: 1, tokens: [] })).toThrow(TokenStoreUnusable);
     expect(() => fresh.block(id(1))).toThrow(TokenStoreUnusable);
     expect(readFileSync(file, 'utf8')).toBe('{');
+  });
+});
+
+describe('localTokenDigests', () => {
+  it('digests the admin, client and audit tokens, the audit one only when set', () => {
+    const h = (x: string) => createHash('sha256').update(x).digest();
+    expect(localTokenDigests({ adminToken: 'a'.repeat(32), tokens: ['c1', 'c2'], auditToken: 'au' })).toEqual([h('a'.repeat(32)), h('c1'), h('c2'), h('au')]);
+    expect(localTokenDigests({ adminToken: 'x', tokens: [], auditToken: null })).toEqual([h('x')]);
   });
 });

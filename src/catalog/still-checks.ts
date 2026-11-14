@@ -1,4 +1,5 @@
 import type { Catalog } from './db';
+import { summaryCategories } from '../analytics/classes';
 
 // Still checks (cams #179, spec 2026-10-04-still-checks-design §1): Vision on
 // a second picked by hand, stored apart from events. Only successful calls
@@ -70,7 +71,7 @@ export interface LinkedEvent { id: number; kind: string; confirmed: boolean }
 // person, vehicle or pet event whose category is in the check's summary (any
 // score). Oldest start first.
 export function linkedEvents(c: Catalog, cam: string, ts: number, summary: unknown[], maxOpenMs: number): LinkedEvent[] {
-  const found = new Set(summary.map((s) => (s && typeof s === 'object' ? (s as { category?: unknown }).category : undefined)).filter((x): x is string => typeof x === 'string'));
+  const found = new Set(summaryCategories(summary));
   const rows = c.db
     .prepare('SELECT id, kind FROM events WHERE cam = ? AND start_ts <= ? AND start_ts >= ? AND COALESCE(end_ts, start_ts + ?) >= ? ORDER BY start_ts, id')
     // start_ts ≥ ts − 1 day bounds the index scan: no event is longer (an open one ends after maxOpen).

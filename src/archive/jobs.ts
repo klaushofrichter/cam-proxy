@@ -3,6 +3,7 @@ import { renameSync, statSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { crc32 } from 'zlib';
 import type { ArchiveRow } from '../catalog/archive';
+import { within } from '../async';
 import { logger } from '../log';
 import { itemJson, metadataJson, type ArchiveItem } from './json';
 import { chooseThumbnail, type Taken, type ThumbDeps } from './metadata';
@@ -129,9 +130,7 @@ export class ArchiveJobs {
   async wait(id: string, ms: number): Promise<JobView | undefined> {
     const j = this.jobs.get(id);
     if (!j) return undefined;
-    let t: NodeJS.Timeout | undefined;
-    await Promise.race([j.done, new Promise<void>((r) => (t = setTimeout(r, ms)))]);
-    clearTimeout(t);
+    await within(j.done, ms);
     return this.view(j);
   }
 

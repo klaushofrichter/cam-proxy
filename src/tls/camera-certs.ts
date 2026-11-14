@@ -1,13 +1,14 @@
-import { closeSync, existsSync, fsyncSync, mkdirSync, openSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync, writeSync } from 'fs';
+import { existsSync, mkdirSync, readdirSync, readFileSync, renameSync, rmSync, writeFileSync } from 'fs';
 import { join } from 'path';
-import type { AuditLog } from '../audit/audit-log';
+import { cmdFields, whoFields, type AuditLog } from '../audit/audit-log';
 import { logger } from '../log';
 import { fingerprintOf, writeSecret, type SiteCa } from './ca';
 import { X509Certificate } from 'crypto';
 import { issuedBy, issueLeaf, leafOf, renewalDue, type Leaf } from './leaf';
 import type { PushOutcome, PushResult } from './push';
 import type { Served } from './served';
-import { DAY, HOUR } from '../time-units';
+import { DAY, HOUR, utcDay } from '../time-units';
+import { writeFileAtomicSync } from '../fs-util';
 
 export type CertMode = 'site-ca' | 'pinned' | 'public' | 'none';
 export interface CertState {
@@ -268,7 +269,7 @@ export class CameraCerts {
   }
   // Host-level problems for the health item: an unreadable state, cameras on the previous CA.
   problems(): string[] {
-    const until = new Date(this.previousSince + PREVIOUS_CA_DAYS * DAY).toISOString().slice(0, 10);
+    const until = utcDay(this.previousSince + PREVIOUS_CA_DAYS * DAY);
     const lagging = this.previousCa ? [...this.states].filter(([id, st]) => st.mode === 'site-ca' && this.extras.get(id)?.onPrevious).map(([id]) => `${id} still serves a leaf of the previous CA (trusted until ${until})`) : [];
     return [...(this.corrupt ? [CORRUPT] : []), ...lagging];
   }
@@ -334,15 +335,7 @@ export class CameraCerts {
       }),
     );
     const file = join(this.camDir(), 'state.json');
-    const tmp = `${file}.tmp`;
-    const fd = openSync(tmp, 'w', 0o600);
-    try {
-      writeSync(fd, JSON.stringify({ cameras, previousCa: this.previousCa, previousSince: this.previousCa ? this.previousSince : null }));
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    renameSync(tmp, file);
+    writeFileAtomicSync(file, JSON.stringify({ cameras, previousCa: this.previousCa, previousSince: this.previousCa ? this.previousSince : null }), { mode: 0o600 });
   }
 
   state(id: string): CertState {
@@ -359,11 +352,10 @@ export class CameraCerts {
       type: ['change'],
       outcome,
       user: who?.user ?? 'system',
-      ...(who?.ip ? { ip: who.ip } : {}),
-      ...(who?.userAgent ? { userAgent: who.userAgent } : {}),
+      ...whoFields(who),
       ...(id ? { camera: id } : {}),
       message,
-      details: { ...details, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) },
+      details: { ...details, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...cmdFields(who) },
     });
   }
 
@@ -622,7 +614,7 @@ export class CameraCerts {
     // Why nothing was pushed: for "Push now", an answer and an audit record.
     const skip = (detail: string, served: string | null = null): PushResult | null => {
       if (!manual) return null;
-      this.d.audit?.write({ action: 'camera-cert-push', category: ['configuration'], type: ['change'], outcome: 'failure', user: who?.user ?? 'admin', ...(who?.ip ? { ip: who.ip } : {}), ...(who?.userAgent ? { userAgent: who.userAgent } : {}), camera: cam.id, message: `Camera certificate push not done (${cam.id}): ${detail}`, details: { detail, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) } });
+      this.d.audit?.write({ action: 'camera-cert-push', category: ['configuration'], type: ['change'], outcome: 'failure', user: who?.user ?? 'admin', ...whoFields(who), camera: cam.id, message: `Camera certificate push not done (${cam.id}): ${detail}`, details: { detail, ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...cmdFields(who) } });
       return { outcome: 'failed', served, detail, tookMs: 0 };
     };
     const known = (): boolean => ['site-ca', 'pinned'].includes(this.states.get(cam.id)?.mode ?? 'none');
@@ -741,11 +733,10 @@ export class CameraCerts {
       type: ['change'],
       outcome: r.outcome === 'pushed' || r.outcome === 'current' ? 'success' : 'failure',
       user: manual ? (who?.user ?? 'admin') : 'system',
-      ...(who?.ip ? { ip: who.ip } : {}),
-      ...(who?.userAgent ? { userAgent: who.userAgent } : {}),
+      ...whoFields(who),
       camera: cam.id,
       message: `Camera certificate ${r.outcome} (${cam.id}, ${Math.round(r.tookMs / 1000)} s)${this.states.get(cam.id)?.mode === 'pinned' && r.outcome === 'refused' ? `: pinned to ${r.served}` : ''}`,
-      details: { served: r.served, ...(r.leaf ? { leaf: r.leaf.fingerprint, notAfter: r.leaf.notAfter } : {}), ...(r.detail ? { detail: r.detail } : {}), ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...(who?.cmdId ? { cmdId: who.cmdId, actor: who.actor } : {}) },
+      details: { served: r.served, ...(r.leaf ? { leaf: r.leaf.fingerprint, notAfter: r.leaf.notAfter } : {}), ...(r.detail ? { detail: r.detail } : {}), ...(who?.requestedBy ? { requestedBy: who.requestedBy } : {}), ...cmdFields(who) },
     });
     return r;
   }

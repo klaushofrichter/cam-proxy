@@ -41,6 +41,14 @@ describe('analytics API', () => {
     const jpg = await request(p.base).get(`/api/cameras/cam1/events/${e.id}/analysis.jpg`).set(auth());
     expect(jpg.status).toBe(200);
     expect(jpg.headers['content-type']).toBe('image/jpeg');
+    expect(jpg.headers['cache-control']).toBe('private, max-age=604800, immutable');
+    expect([...jpg.body]).toEqual([0xff, 0xd8, 0xff, 0xd9]);
+    // The image file gone (pruned): 404, not an error.
+    const e2 = insertEvent(c, { cam: 'cam1', source: 'onvif', kind: 'person', start_ts: Date.now() - 50_000, raw: null });
+    saveAnalysis(c, { event_id: e2.id, provider: 'google-vision', status: 'ok', reason: null, still_ts: e2.start_ts + 1000, image: join(dir, 'gone.jpg'), requested_at: Date.now(), took_ms: 250, objects: '[]', raw: null, summary: null });
+    const gone = await request(p.base).get(`/api/cameras/cam1/events/${e2.id}/analysis.jpg`).set(auth());
+    expect(gone.status).toBe(404);
+    expect(gone.body).toEqual({ error: 'not_found' });
     expect((await request(p.base).get('/api/cameras/cam1/events/999999/analysis').set(auth())).status).toBe(404);
   });
 

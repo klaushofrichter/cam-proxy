@@ -1,5 +1,6 @@
 import type { SQLInputValue } from 'node:sqlite';
 import type { Catalog } from './db';
+import { DAY } from '../time-units';
 
 // The Archive's rows (spec 2026-10-05-archive-design §1.1). JSON columns are
 // strings here; src/archive/ turns them into the API's shapes.
@@ -26,7 +27,6 @@ export interface ArchiveRow {
 }
 export type ArchiveInput = Omit<ArchiveRow, 'id' | 'labels' | 'expires_at'> & { labels: string[] };
 
-const DAY = 86_400_000;
 const expiresAt = (created: number, days: number | null) => (days === null ? null : created + days * DAY);
 
 export function insertArchive(c: Catalog, r: ArchiveInput): ArchiveRow {

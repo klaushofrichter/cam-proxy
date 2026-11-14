@@ -2,6 +2,8 @@ import { analysesFor } from '../catalog/analyses';
 import type { Catalog } from '../catalog/db';
 import { eventsOverlapping } from '../catalog/events';
 import { checksInRange } from '../catalog/still-checks';
+import { parseStoredList as list } from '../catalog/json';
+import { summaryCategories as categories } from '../analytics/classes';
 
 // The metadata snapshot and the thumbnail choice (spec
 // 2026-10-05-archive-design §2.5, §2.6). The snapshot is the JSON the API
@@ -38,17 +40,6 @@ export interface Snapshot {
 // Image copies by event id (analyses) and by check id, for the thumbnail only.
 export interface Taken { snapshot: Snapshot; images: { analyses: Map<number, string>; checks: Map<number, string> } }
 
-const list = (s: string | null): unknown[] => {
-  if (s === null) return [];
-  try {
-    const v: unknown = JSON.parse(s);
-    return Array.isArray(v) ? v : [];
-  } catch {
-    return [];
-  }
-};
-const categories = (summary: unknown[]): string[] =>
-  summary.map((x) => (x && typeof x === 'object' ? (x as { category?: unknown }).category : undefined)).filter((x): x is string => typeof x === 'string');
 
 export function takeSnapshot(d: { catalog: Catalog; cam: string; cameraName: string; model: string | null; version: string; maxOpenMs: number; now: number }, from: number, to: number): Taken {
   const rows = eventsOverlapping(d.catalog, d.cam, from - SLACK_MS, to, d.maxOpenMs);

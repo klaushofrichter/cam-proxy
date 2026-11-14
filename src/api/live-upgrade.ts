@@ -14,6 +14,7 @@ import WebSocket from 'ws';
 import { LIVE, refuseLive, validCodecs, type LiveRelay } from '../stream/live';
 import type { LiveSources } from '../stream/live-sources';
 import { upgradeAccess, type AccessDeps } from './auth';
+import { plainIp } from '../util/cidr';
 
 const PATH = /^\/api\/cameras\/([^/?]+)\/live$/;
 // Upgrades per client address and minute.
@@ -61,7 +62,7 @@ export function liveUpgrade(d: { access: AccessDeps; cameras: CameraRegistry; re
     if (!m || req.method !== 'GET') return answer(socket, 404, { error: 'not_found' });
     // Tokens never travel in URLs.
     if (url.searchParams.has('token') || url.searchParams.has('access_token')) return answer(socket, 400, { error: 'token_in_url' });
-    if (!allow((req.socket.remoteAddress ?? '').replace(/^::ffff:/, ''))) return answer(socket, 429, { error: 'rate_limited' });
+    if (!allow(plainIp(req.socket.remoteAddress))) return answer(socket, 429, { error: 'rate_limited' });
     const a = upgradeAccess(req, d.access);
     if (a.access !== 'client' && a.access !== 'admin') return answer(socket, 401, { error: 'unauthorized' });
     let cam: string;

@@ -10,7 +10,7 @@ import type { AuditLog } from './audit/audit-log';
 import type { Config } from './config/defaults';
 import { logger } from './log';
 import type { StreamLog } from './stream/log';
-import { DAY, dayStart, HOUR } from './time-units';
+import { DAY, dayStart, HOUR, utcDay } from './time-units';
 import { realStatfs } from './health/host';
 import { activeCameraIds, cameraConfig } from './config/cameras';
 import { listDirSync } from './fs-util';
@@ -210,7 +210,7 @@ export class Storage extends EventEmitter {
     used += out.audit.bytes;
     growth += out.audit.growthPerDay;
     const disk = this.disk();
-    const budget = this.budget();
+    const budget = budgetOf(this.d.config(), disk.size); // budget(), with the statfs just made
     return { ...out, free: disk.free, size: disk.size, budget, used, daysUntilFull: growth > 0 ? Math.max(0, (budget - used) / growth) : null };
   }
 
@@ -313,12 +313,12 @@ export class Storage extends EventEmitter {
       };
       sweep('analytics', analysisImages(this.d.catalog));
       sweep('still-checks', checkImages(this.d.catalog));
-      pruneUsage(this.d.catalog, new Date(now - 400 * DAY).toISOString().slice(0, 10));
+      pruneUsage(this.d.catalog, utcDay(now - 400 * DAY));
       deleted.streamLog = this.d.log.deleteBefore(logBefore);
     }
 
     // The audit log keeps whole UTC days; only retention removes them, never the budget.
-    if (this.d.audit) deleted.audit = this.d.audit.deleteBefore(new Date(dayStart(now - cfg.retention.auditDays * DAY)).toISOString().slice(0, 10), dry);
+    if (this.d.audit) deleted.audit = this.d.audit.deleteBefore(utcDay(dayStart(now - cfg.retention.auditDays * DAY)), dry);
 
     // The files: age, the caps and the budget (plan()).
     const fixed = this.d.catalog.sizeBytes() + (this.d.audit?.usage().bytes ?? 0); // audit bytes count, are never dropped

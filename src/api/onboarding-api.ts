@@ -2,6 +2,7 @@ import express, { type Request, type Response } from 'express';
 import type { OnboardingService, Refusal, Who } from '../onboarding/service';
 import { actorOf, clientIp, requireLocalAdmin, type AccessInfo } from './auth';
 import { cameraParam } from './camera-param';
+import { notFound } from './respond';
 
 // The onboarding routes (spec 2026-10-30-camera-onboarding-design §4), mounted
 // on /control behind requireAccess('admin'). A camera password is write-only:
@@ -37,7 +38,7 @@ export function onboardingApi(s: OnboardingService): express.Router {
   r.get('/onboarding', async (_req, res) => void res.json({ cameras: await s.status() }));
   r.get('/cameras/:cam/onboarding', async (req, res) => {
     const [one] = await s.status(String(req.params.cam));
-    if (!one) return void res.status(404).json({ error: 'not_found' });
+    if (!one) return notFound(res);
     res.json(one);
   });
   // Add a camera (§4.3): local admin only, never a managed token or sign-in; 201 {onboarding}.

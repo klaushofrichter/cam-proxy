@@ -2,6 +2,21 @@
 
 ## Unreleased
 
+- Going to a saved position now ends in focus, without a click on Focus, on cameras that can focus by themselves (the E1). The camera refocuses on its own when the position has another zoom, but not when the zoom stays the same, so a bad focus used to stay bad. The proxy now waits until the camera stands still after the go (it reads the position about every 300 ms, up to 20 s) and, when the zoom is unchanged, focuses once. The go answers as before, without waiting. Any other pan, tilt, zoom, focus, stop or go on that camera cancels the pending focus, so it never fights the person at the controls. For every client (cams, MCP); no API change.
+- Fixes from a code review (2026-11-14):
+  - Composed clips and Archive thumbnails use a camera's own stills interval where it has one (they used the host's), so stills every few seconds hold until the next one instead of turning into "No recording" cards.
+  - Adding a camera on the Pi: when the camera's password line can't be removed from `.env`, the add now puts `.env` back as it was and trusts no certificate (it left `CAMERA_HOST` written and the certificate pinned).
+  - FTP: cameras behind `ftp.sourceSubnet` or configured by host name each count at their address, so several cameras behind one address get their connections and one camera's wrong password no longer locks the others out at once.
+  - A still whose minute file was deleted or cut short while it was read is "no still" instead of an error or a broken JPEG.
+  - The admin UI's Clips page shows sizes in the same MB (1024²) as every other page.
+  - A camera whose certificate trust is set back to its configuration keeps its configured CA.
+  - The camera trust and certificate push audit records name a cams-admin command's actor like every other record.
+  - IPv4 addresses and subnets in the configuration are read strictly (plain decimal octets, a whole prefix from 0 to 32).
+
+- Internal cleanup (/simplify): shared helpers replace duplicated code; no change in behavior or API. Slightly less work on the Pi: the event-image reads no longer block the server, the status and stats pages ask the disk and the catalog less often, and the still splitter rescans less.
+
+## v2026.11.13.1
+
 - Archive: the predefined label for the main stream is now `Hi` instead of `4K` (not every camera's main stream is 4K). Clips archived earlier keep `4K` as an ordinary label.
 
 ## v2026.11.12.1

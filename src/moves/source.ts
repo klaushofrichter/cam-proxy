@@ -19,6 +19,9 @@ import { HOUR } from '../time-units';
 import { listPositions } from '../catalog/ptz-positions';
 import { leftoverItems, type EnvCleanup, type MoveLeftovers } from './leftovers';
 
+// The retention a move's plan and purge go by (stills, previews, clips, events).
+export type MoveRetention = Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
+
 // The source side of a camera move (camera-move plan Task 7, S §4, §7, §9.1):
 // the source proxy's page starts a move (move.targets, move.request events),
 // cams-admin opens it (move.open: the journal with the token hash and the
@@ -35,7 +38,7 @@ export interface SourceDeps {
   audit: Pick<AuditLog, 'write'>;
   emit: (e: MoveEvent) => void;
   // The retention in effect: finished and cancelled phases carry what ages out (keepDays); left out, they carry none.
-  retention?: () => Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
+  retention?: () => MoveRetention;
   // The settings in effect (cameras, tls.site) and the loaded configuration (release writes `moved`).
   running: () => Config;
   loaded: () => Loaded;

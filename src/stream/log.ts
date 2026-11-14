@@ -1,5 +1,6 @@
 import { EventEmitter } from 'events';
 import type { Catalog } from '../catalog/db';
+import type { StatementSync } from 'node:sqlite';
 
 export const STREAM_TYPES = ['camera-event', 'camera-status', 'clip', 'annotation', 'still', 'analysis', 'camera', 'still-check', 'archive', 'ptz-positions'] as const;
 export type StreamType = (typeof STREAM_TYPES)[number];
@@ -32,8 +33,12 @@ export class StreamLog extends EventEmitter {
     this.setMaxListeners(0);
   }
 
+  // Prepared once: append runs for every stream message (a still each second per camera).
+  private insert?: StatementSync;
+
   append(cam: string, type: StreamType, data: Record<string, unknown>): StreamMessage {
-    const r = this.c.db.prepare('INSERT INTO stream_log (ts, cam, type, data) VALUES (?, ?, ?, ?) RETURNING *').get(this.now(), cam, type, JSON.stringify(data)) as Row;
+    this.insert ??= this.c.db.prepare('INSERT INTO stream_log (ts, cam, type, data) VALUES (?, ?, ?, ?) RETURNING *');
+    const r = this.insert.get(this.now(), cam, type, JSON.stringify(data)) as Row;
     const m = fromRow(r);
     this.emit('message', m);
     return m;

@@ -74,10 +74,31 @@ export class ReolinkPtz {
   // the focus sweeps and settles in about 4 s, the picture keeps its zoom
   // (measured 2026-11-12; the same as after any zoom with autofocus on).
   async autofocus(): Promise<void> {
+    await this.focusAt(await this.zoomPos());
+  }
+
+  // StartZoomFocus ZoomPos to `zoom`; to the current zoom it is an autofocus.
+  async focusAt(zoom: number): Promise<void> {
+    await this.command('StartZoomFocus', { ZoomFocus: { channel: 0, op: 'ZoomPos', pos: zoom } });
+  }
+
+  // The zoom position (GetZoomFocus).
+  async zoomPos(): Promise<number> {
     const r = (await this.command('GetZoomFocus', { channel: 0 })) as { ZoomFocus?: { zoom?: { pos?: unknown } } } | undefined;
     const pos = r?.ZoomFocus?.zoom?.pos;
     if (typeof pos !== 'number' || !Number.isInteger(pos)) throw new CameraError('camera_error', 'GetZoomFocus gave no zoom position', true);
-    await this.command('StartZoomFocus', { ZoomFocus: { channel: 0, op: 'ZoomPos', pos } });
+    return pos;
+  }
+
+  // The pan/tilt position, in the camera's own units (GetPtzCurPos; it takes
+  // {PtzCurPos: {channel}}, a plain {channel} is refused with -1, measured on
+  // the E1 2026-11-14). Only for telling whether a move has stopped.
+  async position(): Promise<{ pan: number; tilt: number }> {
+    const r = (await this.command('GetPtzCurPos', { PtzCurPos: { channel: 0 } })) as { PtzCurPos?: { Ppos?: unknown; Tpos?: unknown } } | undefined;
+    const pan = r?.PtzCurPos?.Ppos;
+    const tilt = r?.PtzCurPos?.Tpos;
+    if (typeof pan !== 'number' || typeof tilt !== 'number') throw new CameraError('camera_error', 'GetPtzCurPos gave no position', true);
+    return { pan, tilt };
   }
 
   async goTo(slot: number): Promise<void> {

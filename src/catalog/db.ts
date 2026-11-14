@@ -15,6 +15,20 @@ export interface Catalog {
   sizeBytes(): number; // the database plus its WAL and shared-memory files
 }
 
+// fn inside one transaction: COMMIT after it, ROLLBACK (and rethrow) when it throws.
+// node:sqlite has no transaction() helper.
+export function inTransaction<T>(db: DatabaseSync, fn: () => T): T {
+  db.exec('BEGIN');
+  try {
+    const out = fn();
+    db.exec('COMMIT');
+    return out;
+  } catch (err) {
+    db.exec('ROLLBACK');
+    throw err;
+  }
+}
+
 export function openCatalog(file: string): Catalog {
   let db: DatabaseSync;
   try {
@@ -45,15 +59,10 @@ export function openCatalog(file: string): Catalog {
     logger.warn({ file, version: version(), known: MIGRATIONS.length }, 'catalog_newer_than_code');
   }
   for (let v = version(); v < MIGRATIONS.length; v++) {
-    db.exec('BEGIN');
-    try {
+    inTransaction(db, () => {
       db.exec(MIGRATIONS[v]);
       db.prepare('INSERT INTO schema_version (version) VALUES (?)').run(v + 1);
-      db.exec('COMMIT');
-    } catch (err) {
-      db.exec('ROLLBACK');
-      throw err;
-    }
+    });
   }
   return {
     db,

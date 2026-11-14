@@ -129,9 +129,16 @@ export class ReolinkClient {
   ) {
     this.gate = new Semaphore(opts.maxConcurrent ?? 2);
     this.timeoutMs = opts.timeoutMs ?? DEFAULT_TIMEOUT_MS;
-    this.target = { protocol: cam.protocol, host: cam.host, tlsServername: cam.tlsServername, ...(cam.tlsCa ? { ca: cam.tlsCa } : {}) };
-    if (cam.tlsCa && cam.tlsServername) this.trust = { ca: cam.tlsCa, servername: cam.tlsServername };
+    this.target = this.useConfigured();
     this.warned = opts.quiet === true;
+  }
+
+  // The trust as configured (the camera's tlsCa and tlsServername): the
+  // constructor's, and setTrust(undefined)'s.
+  private useConfigured(): CameraTarget {
+    const c = this.cam;
+    this.trust = c.tlsCa && c.tlsServername ? { ca: c.tlsCa, servername: c.tlsServername } : undefined;
+    return { protocol: c.protocol, host: c.host, tlsServername: c.tlsServername, ...(c.tlsCa ? { ca: c.tlsCa } : {}) };
   }
 
   // The "not verified" warning: once, at the first request that goes out
@@ -150,10 +157,9 @@ export class ReolinkClient {
   setTrust(t0: CameraTrust | undefined): void {
     this.refusal = t0?.refuse;
     const t = t0 && t0.refuse === undefined ? t0 : undefined;
+    if (!t) return void (this.target = this.useConfigured());
     this.trust = t;
-    this.target = t
-      ? { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca, ...(t.fingerprint ? { pin: t.fingerprint } : {}) }
-      : { protocol: this.cam.protocol, host: this.cam.host, tlsServername: this.cam.tlsServername };
+    this.target = { protocol: this.cam.protocol, host: this.cam.host, tlsServername: t.servername, ca: t.ca, ...(t.fingerprint ? { pin: t.fingerprint } : {}) };
   }
 
   // Whether requests verify the camera (a CA or a pin set, or a public-CA name).
@@ -165,11 +171,17 @@ export class ReolinkClient {
     return (this.opts.now ?? Date.now)();
   }
 
+  // Before any request: refuse a camera without a trusted certificate (the
+  // token never goes to it), and warn once about an unverified one.
+  private preflight(): void {
+    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
+    this.warnUnverified();
+  }
+
   private async post(cmd: string, param: object, token?: string, action: 0 | 1 = 0): Promise<ReolinkReply> {
     const path = `/cgi-bin/api.cgi?cmd=${encodeURIComponent(cmd)}${token ? `&token=${encodeURIComponent(token)}` : ''}`;
     const body = JSON.stringify([{ cmd, action, param }]);
-    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
-    this.warnUnverified();
+    this.preflight();
     return this.gate.run(async () => {
       let res: IncomingMessage;
       try {
@@ -351,8 +363,7 @@ export class ReolinkClient {
   // itself needs a gate slot via post(), and a slot this attempt is already
   // holding can't be re-acquired - that deadlocked permanently.
   private async snapshotAttempt(token: string): Promise<{ ok: true; body: Buffer } | { ok: false }> {
-    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
-    this.warnUnverified();
+    this.preflight();
     return this.gate.run(async () => {
       const path = `/cgi-bin/api.cgi?cmd=Snap&channel=0&rs=${randomBytes(6).toString('hex')}&token=${encodeURIComponent(token)}`;
       let res: IncomingMessage;
@@ -399,8 +410,7 @@ export class ReolinkClient {
   // `timeoutMs`: until the headers. Never logs the URL (it has the token).
   async openDownload(source: string, o: { timeoutMs?: number } = {}): Promise<IncomingMessage> {
     if (!SAFE_RECORDING_PATH.test(source) || source.includes('..')) throw new CameraError('camera_error', 'unexpected recording path');
-    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
-    this.warnUnverified();
+    this.preflight();
     const output = source.slice(source.lastIndexOf('/') + 1);
     const timeoutMs = o.timeoutMs ?? this.timeoutMs;
     for (let attempt = 0; attempt < 2; attempt++) {
@@ -461,8 +471,7 @@ export class ReolinkClient {
   // a close before the headers logs in again once. Never logs the URL, and no
   // error carries it.
   async openLiveFlv(o: { timeoutMs?: number } = {}): Promise<IncomingMessage> {
-    if (this.refusal) throw new CameraError('camera_error', `no trusted certificate for this camera: ${this.refusal}`);
-    this.warnUnverified();
+    this.preflight();
     const timeoutMs = o.timeoutMs ?? this.timeoutMs;
     for (let attempt = 0; attempt < 2; attempt++) {
       const token = await this.tokenForRequest();

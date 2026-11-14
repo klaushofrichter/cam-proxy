@@ -18,7 +18,7 @@ import { sleep, TIMED_OUT, within } from '../async';
 import { errorMessage, logger } from '../log';
 import { actorOf, clientIp, requireAccess, type AccessDeps, type AccessInfo } from './auth';
 import { cameraParam, workerOf } from './camera-param';
-import { bad } from './respond';
+import { bad, notFound } from './respond';
 import { tooSoonDetail } from './actions';
 import { whoOf } from './onboarding-api';
 import { cameraTls } from './client-api';
@@ -216,7 +216,7 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
 
   r.get('/cameras/:cam/settings/:section', async (req, res) => {
     const section = req.params.section;
-    if (!isSection(section)) return void res.status(404).json({ error: 'not_found' });
+    if (!isSection(section)) return notFound(res);
     const w = workerOf(res);
     if (!w.status.state().online) return offline(res);
     const v = await timedRead(res, readSettings(w, section), 'settings_read_failed');

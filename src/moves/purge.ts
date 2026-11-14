@@ -5,7 +5,7 @@ import type { ArchiveMoveNote } from '../archive/metadata';
 import type { Archive } from '../archive/service';
 import { CAM_ID } from '../archive/paths';
 import { archiveById } from '../catalog/archive';
-import type { Catalog } from '../catalog/db';
+import { inTransaction, type Catalog } from '../catalog/db';
 import { logger } from '../log';
 import type { Storage } from '../storage';
 import { allChunkParts } from './chunk-parts';
@@ -134,8 +134,7 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
     }
   }
   const db = d.catalog.db;
-  db.exec('BEGIN');
-  try {
+  inTransaction(db, () => {
     // analyses go with their event (ON DELETE CASCADE).
     for (const t of ['annotations', 'stream_log', 'analytics_usage', 'clip_arrivals']) db.prepare(`DELETE FROM ${t} WHERE cam = ?`).run(cam);
     for (const t of Object.keys(keepIds) as (keyof typeof keepIds)[]) {
@@ -149,11 +148,7 @@ export function purgeExcept(d: PurgeDeps, cam: string, o: PurgeExcept): { delete
       const note = o.note!;
       db.prepare('UPDATE archive SET metadata = ? WHERE id = ? AND cam = ?').run(withMoveNote(row.metadata, { moveId: note.moveId, to: { ...note.to }, at: note.at, kept: true, reason: n.reason }), n.id, cam);
     }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  });
   // meta.json of a kept item follows its row (the note in the file too).
   for (const n of notes) {
     const row = archiveById(d.catalog, n.id);
@@ -234,6 +229,20 @@ export function removeLanded(dataDir: string, moveId: string): void {
 // it (ON DELETE CASCADE), and it exists nowhere else; the copy back leaves it
 // out (an imported event is not this proxy's capture). It ages out with the
 // retention here; `kept` counts its analysis images.
+// The catalog rows of one camera a move brought in or sent back, by id, in
+// one transaction: an analysis only when its event is this camera's.
+type RowIds = Record<'events' | 'analyses' | 'clips' | 'still_checks' | 'archive', number[]>;
+export function deleteRowsByIds(db: Catalog['db'], cam: string, ids: RowIds): void {
+  inTransaction(db, () => {
+    const an = db.prepare('DELETE FROM analyses WHERE id = ? AND event_id IN (SELECT id FROM events WHERE cam = ?)');
+    for (const id of ids.analyses) an.run(id, cam);
+    for (const t of ['events', 'clips', 'still_checks', 'archive'] as const) {
+      const st = db.prepare(`DELETE FROM ${t} WHERE id = ? AND cam = ?`);
+      for (const id of ids[t]) st.run(id, cam);
+    }
+  });
+}
+
 export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: string; storage: Pick<Storage, 'recount'> }, r: MoveRecord): { deleted: Purged; kept: Purged } {
   const cam = r.camera;
   if (!CAM_ID.test(cam)) throw new Error('removeImported: not a camera id');
@@ -242,7 +251,7 @@ export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
   const inside = (p: unknown, folder: string): p is string => typeof p === 'string' && p.startsWith(join(d.dataDir, folder, cam) + sep) && !p.split(sep).includes('..');
   const files = new Map<string, FileKind>();
   for (const rel of landedFiles(d.dataDir, r.id)) if (relOk(cam, rel, LANDED_FOLDERS)) files.set(join(d.dataDir, ...rel.split('/')), FOLDER_KIND[rel.split('/')[0]]);
-  const ids: Record<'events' | 'analyses' | 'clips' | 'still_checks' | 'archive', number[]> = { events: [], analyses: [], clips: [], still_checks: [], archive: [] };
+  const ids: RowIds = { events: [], analyses: [], clips: [], still_checks: [], archive: [] };
   const db = d.catalog.db;
   const KEY_SQL: Record<keyof typeof ids, string> = {
     events: 'SELECT start_ts, source, kind FROM events WHERE id = ? AND cam = ?',
@@ -303,23 +312,7 @@ export function removeImported(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
     if (inside(row?.image, 'still-checks')) files.set(row.image, 'checks');
   }
   for (const id of ids.archive) if (pick('SELECT 1 AS x FROM archive WHERE id = ? AND cam = ?', id)) folders.push(join(d.dataDir, 'archive', cam, String(id)));
-  db.exec('BEGIN');
-  try {
-    const del = (t: string, list: number[]) => {
-      const st = db.prepare(`DELETE FROM ${t} WHERE id = ? AND cam = ?`);
-      for (const id of list) st.run(id, cam);
-    };
-    const an = db.prepare('DELETE FROM analyses WHERE id = ? AND event_id IN (SELECT id FROM events WHERE cam = ?)');
-    for (const id of ids.analyses) an.run(id, cam);
-    del('events', ids.events);
-    del('clips', ids.clips);
-    del('still_checks', ids.still_checks);
-    del('archive', ids.archive);
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  deleteRowsByIds(db, cam, ids);
   for (const [p, kind] of files) {
     try {
       const st = lstatSync(p);
@@ -384,7 +377,7 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
     return !!c && !!was && was.files === c.files && was.bytes === c.bytes && was.rows === c.rows;
   };
   const db = d.catalog.db;
-  const rows: Record<'clips' | 'events' | 'analyses' | 'still_checks' | 'archive', number[]> = { clips: [], events: [], analyses: [], still_checks: [], archive: [] };
+  const rows: RowIds = { clips: [], events: [], analyses: [], still_checks: [], archive: [] };
   const files: { path: string; kind: FileKind }[] = [];
   const folders: string[] = [];
   const tally = (t: Purged, kind: FileKind, path: string) => {
@@ -426,19 +419,7 @@ export function removeReturned(d: { catalog: Pick<Catalog, 'db'>; dataDir: strin
       for (const f of it.files) files.push({ path: f, kind });
     }
   }
-  db.exec('BEGIN');
-  try {
-    const an = db.prepare('DELETE FROM analyses WHERE id = ? AND event_id IN (SELECT id FROM events WHERE cam = ?)');
-    for (const id of rows.analyses) an.run(id, cam);
-    for (const t of ['events', 'clips', 'still_checks', 'archive'] as const) {
-      const st = db.prepare(`DELETE FROM ${t} WHERE id = ? AND cam = ?`);
-      for (const id of rows[t]) st.run(id, cam);
-    }
-    db.exec('COMMIT');
-  } catch (err) {
-    db.exec('ROLLBACK');
-    throw err;
-  }
+  deleteRowsByIds(db, cam, rows);
   try {
     for (const f of files) if (tally(deleted, f.kind, f.path)) rmSync(f.path, { force: true });
     for (const f of folders) rmSync(f, { recursive: true, force: true });

@@ -1,5 +1,6 @@
 import { localOffsetMinutes } from '../analytics/local-day';
 import type { TimeInfo } from '../camera/time';
+import { pad2 } from '../time-units';
 
 // The Archive's input rules (spec 2026-10-05-archive-design §2.4): what a
 // name, the labels and a retention may be, the default name, and the file
@@ -51,13 +52,12 @@ export function checkRetention(v: unknown): number | null {
   return v;
 }
 
-const pad = (n: number) => String(n).padStart(2, '0');
 
 // "YYYY-MM-DD HH:MM:SS <camera name>" of a moment in camera time (UTC
 // without the camera's time info), within NAME_MAX.
 export function defaultName(ts: number, cameraName: string, t: TimeInfo | undefined): string {
   const d = new Date(ts + localOffsetMinutes(ts, t) * 60_000);
-  const when = `${d.getUTCFullYear()}-${pad(d.getUTCMonth() + 1)}-${pad(d.getUTCDate())} ${pad(d.getUTCHours())}:${pad(d.getUTCMinutes())}:${pad(d.getUTCSeconds())}`;
+  const when = `${d.getUTCFullYear()}-${pad2(d.getUTCMonth() + 1)}-${pad2(d.getUTCDate())} ${pad2(d.getUTCHours())}:${pad2(d.getUTCMinutes())}:${pad2(d.getUTCSeconds())}`;
   return [...`${when} ${cameraName}`.replace(/\p{Cc}/gu, ' ').replace(/\p{Cf}/gu, '')].slice(0, NAME_MAX).join('').trim();
 }
 

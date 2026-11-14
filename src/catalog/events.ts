@@ -1,4 +1,4 @@
-import type { Catalog } from './db';
+import { inTransaction, type Catalog } from './db';
 import { coverage } from '../inventory/match';
 
 // 'recovered': added by the events inventory's repair from the camera's SD
@@ -127,8 +127,7 @@ export function addRecoveredEvents(c: Catalog, cam: string, list: RecoveredEvent
     minStart = Math.min(minStart, e.start_ts);
     maxEnd = Math.max(maxEnd, e.end_ts);
   }
-  c.db.exec('BEGIN');
-  try {
+  inTransaction(c.db, () => {
     // The rows before this call: the guard compares with those only.
     const last = (c.db.prepare('SELECT COALESCE(MAX(id), 0) AS n FROM events').get() as { n: number }).n;
     const rows = c.db
@@ -149,10 +148,6 @@ export function addRecoveredEvents(c: Catalog, cam: string, list: RecoveredEvent
       }
       added.push(fromDb(insert.get(cam, e.kind, e.start_ts, e.end_ts, JSON.stringify(e.raw ?? null)) as DbRow));
     }
-    c.db.exec('COMMIT');
-  } catch (err) {
-    c.db.exec('ROLLBACK');
-    throw err;
-  }
+  });
   return { added, matched };
 }

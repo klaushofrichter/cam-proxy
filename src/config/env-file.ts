@@ -1,5 +1,6 @@
-import { closeSync, constants, copyFileSync, fsyncSync, lstatSync, openSync, readdirSync, readFileSync, renameSync, chmodSync, unlinkSync, writeSync } from 'fs';
+import { constants, copyFileSync, lstatSync, readdirSync, readFileSync, chmodSync, unlinkSync } from 'fs';
 import { basename, dirname, isAbsolute, join, normalize } from 'path';
+import { writeFileAtomicSync } from '../fs-util';
 
 // The Pi's one .env file (spec 2026-10-04-pi-config-design): cam-proxy reads
 // CAMERA_HOST and PI_ADDRESS from it at start, and "Use this address" writes
@@ -143,6 +144,13 @@ export function writeEnvKey(path: string, keys: string | string[], value: string
   return { key, previous, backup: replaceEnvFile(path, next, now) };
 }
 
+// Puts the file back as `backup` (a name writeEnvKey answered) holds it: a
+// failed step after the write undoes it (onboarding's add).
+export function restoreEnvBackup(path: string, backup: string): void {
+  checkEnvPath(path);
+  writeAtomic(path, readFileSync(join(dirname(path), backup), 'utf8'));
+}
+
 // The text without `key`'s assignment lines (each with its line end); every
 // other byte stays, comments that mention the key too.
 export function withoutEnvKey(text: string, key: string): string {
@@ -221,23 +229,9 @@ function replaceEnvFile(path: string, next: string, now: Date): string {
 function writeAtomic(path: string, next: string): void {
   const dir = dirname(path);
   const mode = lstatSync(path).mode & 0o777;
-  const tmp = join(dir, `${basename(path)}.tmp-${process.pid}`);
   try {
-    const fd = openSync(tmp, 'wx', mode);
-    try {
-      writeSync(fd, next);
-      fsyncSync(fd);
-    } finally {
-      closeSync(fd);
-    }
-    chmodSync(tmp, mode);
-    renameSync(tmp, path);
+    writeFileAtomicSync(join(dir, basename(path)), next, { mode, chmod: true });
   } catch (err) {
-    try {
-      unlinkSync(tmp);
-    } catch {
-      // not created
-    }
     const code = (err as NodeJS.ErrnoException).code;
     if (code === 'EBUSY' || code === 'EXDEV') throw new EnvFileError('is_a_mount', 'the env file is mounted on its own; mount its directory instead');
     if (code === 'EACCES' || code === 'EROFS' || code === 'EPERM') throw new EnvFileError('not_writable', `the env file's directory is not writable (${code}); mount the directory, not the file`);

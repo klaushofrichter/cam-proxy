@@ -463,6 +463,37 @@ describe('a user per camera (spec 2026-10-05-multi-camera-host-design §7)', () 
     expect(refused).toEqual([{ user: 'cam2', ip: '127.0.0.1', expected: '10.42.0.0/16' }]);
   });
 
+  // Cameras behind one address without a known IP (ftp.sourceSubnet, a host name): each
+  // counts there, so one NAT address gets every camera's pre-login slots and failures.
+  const three = (from: { subnet?: string; ip?: string }) => () => new Map(['cam3', 'cam4', 'cam5'].map((c) => [c, { cam: c, ...from }]));
+  it.each([['a source subnet', { subnet: '127.0.0.0/8' }], ['host names', {}]])('with %s, an address holds two connections before login per camera', async (_, from) => {
+    const { port } = await setup({ users: three(from), timeouts: { preLoginMs: 2000 } });
+    const open = [];
+    for (let i = 0; i < 6; i++) open.push(await rawSession(port));
+    expect(open.map((r) => r.greeting.slice(0, 3))).toEqual(Array(6).fill('220'));
+    expect((await rawSession(port)).greeting).toMatch(/^421/);
+    for (const r of open) r.close();
+  });
+
+  it('with camera addresses, only the cameras at that address count', async () => {
+    const users = () => new Map<string, { cam: string; ip?: string; subnet?: string }>([['cam3', { cam: 'cam3', ip: '127.0.0.1' }], ['cam4', { cam: 'cam4', ip: '192.168.60.14' }], ['cam5', { cam: 'cam5', subnet: '10.42.0.0/16' }]]);
+    const { port, client } = await setup({ users, timeouts: { preLoginMs: 2000 } });
+    const open = [await rawSession(port), await rawSession(port)];
+    expect((await rawSession(port)).greeting).toMatch(/^421/);
+    for (const r of open) r.close();
+    await new Promise((r) => setTimeout(r, 50));
+    for (let i = 0; i < 5; i++) await expect(client('nope', 'cam3')).rejects.toThrow(/530/);
+    await expect(client('ftp-pw', 'cam3')).rejects.toThrow(/421/);
+  });
+
+  it("with a source subnet, one camera's bad password doesn't lock the others out at once", async () => {
+    const { client } = await setup({ users: three({ subnet: '127.0.0.0/8' }) });
+    for (let i = 0; i < 5; i++) await expect(client('nope', 'cam3')).rejects.toThrow(/530/);
+    (await client('ftp-pw', 'cam4')).close(); // a success clears the address's failures
+    for (let i = 0; i < 15; i++) await expect(client('nope', 'cam3')).rejects.toThrow(/530/);
+    await expect(client('ftp-pw', 'cam4')).rejects.toThrow(/421/); // 5 per camera at that address
+  });
+
   it('an unknown user is refused like a wrong password', async () => {
     const { client } = await setup({ users: () => new Map([['cam3', { cam: 'cam3' }]]) });
     await expect(client('ftp-pw', 'cam9')).rejects.toThrow(/530/);
