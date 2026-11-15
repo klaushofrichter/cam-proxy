@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.15.1
+
 - Maintenance page: the camera's restart and the proxy's restarts are separate buttons that say what they restart.
   - "Restart camera side (this camera only)" restarts only the picked camera's connection, also on a proxy with one camera (the Pi). Before, on a one-camera proxy the same button restarted every camera side and applied host-wide settings.
   - Under Proxy, "Restart proxy services (all cameras)" restarts every camera side and applies the waiting settings without a new process; it asks first and says that all cameras' live view, uploads and recordings pause briefly. "Restart proxy" is now called "Restart proxy process".
