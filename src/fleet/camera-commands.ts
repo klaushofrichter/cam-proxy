@@ -113,7 +113,7 @@ export function cameraHandlers(d: CameraCommandDeps): Record<'camera.action' | '
       // The control-action record the route writes for an action without its own (a dry run changes nothing).
       if (!OWN_AUDIT.has(a.action) && a.action !== 'retention-run') {
         const result = ok ? 'ok' : 'error' in o ? o.error : String(o.status);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: ok ? 'success' : 'failure', user: 'cams-admin', message: `Control action ${a.action} by cams-admin (on behalf of ${cmd.actor}): ${result}`, details: { action: a.action, result, requestedBy: 'cams-admin', cmdId: cmd.cmdId, actor: cmd.actor }, ...(a.camera ? { camera: a.camera } : {}) });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: ok ? 'success' : 'failure', user: 'cams-admin', message: `Control action ${a.action} by cams-admin (on behalf of ${cmd.actor}): ${result}`, details: { action: a.action, ...(a.action === 'restart' ? { scope: 'camera' } : {}), result, requestedBy: 'cams-admin', cmdId: cmd.cmdId, actor: cmd.actor }, ...(a.camera ? { camera: a.camera } : {}) });
       }
       return {
         status: ok ? 'ok' : 'failed',

@@ -219,6 +219,41 @@ describe('control API: actions and log', () => {
     await request(p.base).delete('/control/config/server.trustProxy').set(admin());
   });
 
+  // Klaus 2026-11-15 (separate camera and proxy restart): the Maintenance
+  // page's camera restart always takes the camera's route, also on a
+  // one-camera proxy with a legacy `camera` object (the Pi): only that
+  // camera's side restarts, host-wide settings stay pending.
+  it("the camera's route on a one-camera (legacy) proxy restarts that camera only", async () => {
+    const view = async () => (await request(p.base).get('/control/config').set(admin())).body as Record<string, { pending: boolean }>;
+    const host = vi.spyOn(p.proxy, 'restart');
+    const records = () => p.proxy.audit.list({ actions: ['control-action'] }).records.filter((x) => (x.cam_proxy as { action?: string }).action === 'restart');
+    const before = records().length;
+    try {
+      expect((await request(p.base).put('/control/config').set(admin()).send({ camera: { statusPollS: 6 }, events: { onvif: { subscribeMin: 3 } } })).status).toBe(200);
+      expect((await request(p.base).post('/control/cameras/cam1/actions/restart').set(admin())).status).toBe(202);
+      await until(async () => (await view())['cameras.cam1.statusPollS'].pending === false);
+      expect(p.proxy.running.cameras.cam1.statusPollS).toBe(6);
+      expect((await view())['events.onvif.subscribeMin'].pending).toBe(true);
+      expect(host).not.toHaveBeenCalled();
+      await until(() => records().length === before + 1);
+      expect(records()[0]).toMatchObject({ labels: { camera: 'cam1' }, message: 'Control action restart: ok', cam_proxy: { action: 'restart', scope: 'camera', result: 'ok' } });
+      await until(() => p.proxy.intake.state().onvif === 'subscribed');
+    } finally {
+      host.mockRestore();
+      await request(p.base).delete('/control/config/events.onvif.subscribeMin').set(admin());
+    }
+  });
+
+  it('the old route without a camera is the host-wide restart: its record names no camera', async () => {
+    const records = () => p.proxy.audit.list({ actions: ['control-action'] }).records.filter((x) => (x.cam_proxy as { action?: string }).action === 'restart');
+    const before = records().length;
+    expect((await request(p.base).post('/control/actions/restart').set(admin())).status).toBe(202);
+    await until(() => records().length === before + 1);
+    expect(records()[0]).toMatchObject({ message: 'Control action restart (proxy services, all cameras): ok', cam_proxy: { action: 'restart', scope: 'proxy', result: 'ok' } });
+    expect(records()[0].labels).toBeUndefined();
+    await until(() => p.proxy.intake.state().onvif === 'subscribed');
+  });
+
   it('answers 404 for an unknown action', async () => {
     expect((await request(p.base).post('/control/actions/nope').set(admin())).status).toBe(404);
   });

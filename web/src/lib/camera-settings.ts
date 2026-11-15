@@ -53,14 +53,3 @@ export function storageRows(by: Record<string, Usage> | undefined, ids: string[]
 export function passwordHint(id: string): string {
   return `Its password comes from the environment: ${cameraPasswordEnv(id || '<id>')}, or CAMPROXY_CAMERA_PASSWORD for all.`;
 }
-
-// "Restart to apply": the host-wide restart (every camera side, every pending
-// setting). Answers the message to show; never throws.
-export async function restartToApply(api: (method: string, path: string) => Promise<unknown>): Promise<string> {
-  try {
-    await api('POST', '/control/actions/restart');
-    return 'Restarting every camera side; pending settings apply…';
-  } catch (e) {
-    return `Restart failed: ${e instanceof Error ? e.message : 'unknown error'}`;
-  }
-}
