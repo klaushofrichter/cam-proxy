@@ -81,6 +81,9 @@ describe('camera.action', () => {
     const one = vi.spyOn(deps.actions, 'restartCamera');
     expect(await act({ camera: 'cam1', action: 'restart' })).toMatchObject({ status: 'ok', result: { httpStatus: 202, answer: null } });
     expect(one).toHaveBeenCalledWith('cam1');
+    // Its record says it was one camera's (Klaus 2026-11-15: camera and proxy restart told apart).
+    const rec = p.proxy.audit.list({ actions: ['control-action'] }).records.find((x) => (x.cam_proxy as { action?: string }).action === 'restart');
+    expect(rec).toMatchObject({ labels: { camera: 'cam1' }, cam_proxy: { action: 'restart', scope: 'camera', requestedBy: 'cams-admin' } });
     for (const s of Object.values(calls)) expect(s).not.toHaveBeenCalled();
     await until(() => p.proxy.cameras.first().phase() !== 'restarting' && p.proxy.cameras.first().status.state().online, 30_000);
   }, 40_000);

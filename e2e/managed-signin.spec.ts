@@ -42,6 +42,8 @@ test('a cams-admin sign-in: settings, restarts and actions are off, with the rea
   await page.goto('/#/maintenance');
   await expect(page.getByTestId('maintenance-locked')).toHaveText(LOCKED);
   await expect(page.getByTestId('action-restart-proxy')).toBeDisabled();
+  await expect(page.getByTestId('action-restart-services')).toBeDisabled();
+  await expect(page.getByTestId('action-restart')).toBeDisabled();
   await expect(page.getByTestId('action-camera-test')).toBeDisabled();
   await page.context().close();
 });

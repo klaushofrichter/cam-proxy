@@ -2,7 +2,8 @@
   import { refresh, refreshTick, status } from '../lib/state';
   import { cameraNameProblem, CAMERA_NAME_MAX, nameSaveError } from '../lib/camera-name';
   import { blockOf, cameraIds, multiCamera, pickCamera, selectedCamera } from '../lib/cameras';
-  import { cameraPath, restartToApply, settingGroups } from '../lib/camera-settings';
+  import { cameraPath, settingGroups } from '../lib/camera-settings';
+  import { pendingRestarts, restartBadgeTitle, restartCamera, restartProxyServices } from '../lib/restarts';
   import AddCameraCard from '../components/AddCameraCard.svelte';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
@@ -167,9 +168,14 @@
       message = e instanceof ApiError ? e.message : 'not reset';
     }
   }
-  // The host-wide restart: every camera side, every pending setting.
+  // Restart to apply (Klaus 2026-11-15): on the Camera settings page the
+  // picked camera's restart (its pending settings, nothing else); on the
+  // Proxy settings page the host-wide one, Restart proxy services (every
+  // camera side, every pending setting but those read at process start).
+  const pending = $derived(pendingRestarts(view, cam));
+  const canApply = $derived(proxyPage ? pending.host.length + pending.cameras.length > 0 : pending.camera.length > 0);
   async function restart() {
-    message = await restartToApply(api);
+    message = proxyPage ? await restartProxyServices(api) : await restartCamera(api, $status, $selectedCamera);
     setTimeout(() => void load(), 1500);
   }
   // The camera's name is stored on the camera (camera-name design): the
@@ -217,10 +223,11 @@
     <h2 data-testid="page-title">{proxyPage ? 'Proxy settings' : `Camera settings${cam ? `: ${camName(cam)}` : ''}`}</h2>
     <div class="head-buttons">
       {#if proxyPage && overrides}<button onclick={askResetAll} disabled={!!configLocked} title={configLocked ?? undefined} data-testid="reset-all">Reset to defaults</button>{/if}
-      {#if Object.values(view).some((s) => s.pending)}<button onclick={() => void restart()} disabled={!!restartLocked} title={restartLocked ?? undefined} data-testid="restart">Restart to apply</button>{/if}
+      {#if canApply}<button onclick={() => void restart()} disabled={!!restartLocked} title={restartLocked ?? (proxyPage ? 'Restart proxy services: every camera side restarts (live view, uploads and recordings pause briefly), pending settings apply' : 'Restart camera side: this camera only')} data-testid="restart">{proxyPage ? 'Restart proxy services to apply' : 'Restart camera side to apply'}</button>{/if}
     </div>
   </div>
-  <LockedNote why={settingsNote($rights) ?? (Object.values(view).some((s) => s.pending) ? restartLocked : null)} testid="settings-locked" />
+  <LockedNote why={settingsNote($rights) ?? (canApply ? restartLocked : null)} testid="settings-locked" />
+  {#if proxyPage && pending.process.length}<p class="muted small" data-testid="settings-process-pending">Waiting for a new process: {pending.process.join(', ')}. Maintenance → Restart proxy process applies {pending.process.length === 1 ? 'it' : 'them'}.</p>{/if}
   <p class="muted small">From config.json, with changes made here kept as overrides in the data folder. Settings marked "set in .env" come from the environment (CAMERA_HOST, PI_ADDRESS) and win over both; change them in the .env file. Secrets are never shown or set here.</p>
   {#if message}<p class="msg" data-testid="settings-message">{message}</p>{/if}
   {#if !proxyPage && !cam}<p class="muted" data-testid="no-camera">No camera yet: add one in Proxy settings.</p>{/if}
@@ -277,7 +284,7 @@
                 {#if !locked && (dirWhy ?? resetDirWhy)}<div class="env-note" data-testid="dir-note-{p}">{dirWhy ?? resetDirWhy}</div>{/if}
                 {#if rowErrors[p]}<div class="field-error" data-testid="error-{p}">{rowErrors[p]}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={s.restartScope === 'camera' ? "applies after this camera's restart (Maintenance → Restart camera side) or Restart to apply" : 'applies after Restart to apply (every camera side)'}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={restartBadgeTitle(p, s.restartScope)}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} disabled={!!locked || !!dirWhy} title={locked ?? dirWhy ?? undefined} data-testid="save-{p}">Save</button>{/if}
                 {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!locked || !!resetDirWhy} title={locked ?? resetDirWhy ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}

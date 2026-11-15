@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { cameraPath, newCameraProblem, passwordHint, restartToApply, settingGroups, storageRows } from '../web/src/lib/camera-settings';
+import { cameraPath, newCameraProblem, passwordHint, settingGroups, storageRows } from '../web/src/lib/camera-settings';
 import { cameraPassword, loadSecrets } from '../src/config/secrets';
 
 describe('per-camera settings (spec 2026-10-05-multi-camera-host-design §6.3)', () => {
@@ -39,15 +39,5 @@ describe('Add a camera: the password hint names the variable the proxy reads (li
     const s = loadSecrets({ CAMPROXY_TOKENS: 'c'.repeat(32), CAMPROXY_ADMIN_TOKEN: 'a'.repeat(32), CAMPROXY_CAMERA_PASSWORD: 'shared', [name!]: 'own-pw' }, false, ['cam-6']);
     expect(cameraPassword(s, 'cam-6')).toBe('own-pw');
     expect(hint).toContain('CAMPROXY_CAMERA_PASSWORD');
-  });
-});
-
-describe('Restart to apply (live test of #173)', () => {
-  it('posts the host-wide restart and answers a message; an error is a message, never a throw', async () => {
-    const calls: string[] = [];
-    expect(await restartToApply(async (m, p) => void calls.push(`${m} ${p}`))).toBe('Restarting every camera side; pending settings apply…');
-    expect(calls).toEqual(['POST /control/actions/restart']);
-    expect(await restartToApply(async () => { throw Object.assign(new Error('camera_required'), { status: 400 }); })).toBe('Restart failed: camera_required');
-    expect(await restartToApply(async () => { throw new Error('network down'); })).toBe('Restart failed: network down');
   });
 });

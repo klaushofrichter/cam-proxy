@@ -2,6 +2,15 @@
 
 ## Unreleased
 
+- Maintenance page: the camera's restart and the proxy's restarts are separate buttons that say what they restart.
+  - "Restart camera side (this camera only)" restarts only the picked camera's connection, also on a proxy with one camera (the Pi). Before, on a one-camera proxy the same button restarted every camera side and applied host-wide settings.
+  - Under Proxy, "Restart proxy services (all cameras)" restarts every camera side and applies the waiting settings without a new process; it asks first and says that all cameras' live view, uploads and recordings pause briefly. "Restart proxy" is now called "Restart proxy process".
+  - Settings waiting for a restart are listed next to the restart that applies them, and that button is highlighted.
+  - The Settings pages' restart button follows the page: Camera settings restarts that camera, Proxy settings restarts the proxy services.
+  - The audit log tells the two apart: a restart record now has `scope: camera` (naming the camera) or `scope: proxy` (no camera). No API change.
+
+## v2026.11.14.1
+
 - Going to a saved position now ends in focus, without a click on Focus, on cameras that can focus by themselves (the E1). The camera refocuses on its own when the position has another zoom, but not when the zoom stays the same, so a bad focus used to stay bad. The proxy now waits until the camera stands still after the go (it reads the position about every 300 ms, up to 20 s) and, when the zoom is unchanged, focuses once. The go answers as before, without waiting. Any other pan, tilt, zoom, focus, stop or go on that camera cancels the pending focus, so it never fights the person at the controls. For every client (cams, MCP); no API change.
 - Fixes from a code review (2026-11-14):
   - Composed clips and Archive thumbnails use a camera's own stills interval where it has one (they used the host's), so stills every few seconds hold until the next one instead of turning into "No recording" cards.

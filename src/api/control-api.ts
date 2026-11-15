@@ -545,6 +545,13 @@ export function controlApi(d: ControlDeps): express.Router {
     const target = CAMERA_ACTIONS.has(name) ? targetCamera(req, res) : null;
     if (target === undefined) return;
     const requestedBy = res.locals.access?.viaCookie ? 'session' : 'token';
+    // `restart` without a camera is the host-wide restart: every camera side,
+    // every pending setting (as on one camera; live test of #173). The same on
+    // the old route without a camera named (?cam), also with one camera. Its
+    // record names no camera and says `scope: proxy`; a camera's restart (its
+    // route, or ?cam) names the camera, `scope: camera` (Klaus 2026-11-15).
+    const hostRestart = name === 'restart' && (target === null || (!routed && typeof req.query.cam !== 'string'));
+    const scope = name === 'restart' ? { scope: hostRestart ? 'proxy' : 'camera' } : {};
     // A `control-action` record with the result, once the answer is sent or
     // the client went away ('close' fires in both cases; 'finish' only in the
     // first). Not for the camera reboot and the process restart (their own
@@ -557,14 +564,11 @@ export function controlApi(d: ControlDeps): express.Router {
         const done = res.writableFinished;
         const ok = done && res.statusCode < 400;
         const result = !done ? 'aborted' : ok ? 'ok' : String((res.locals.errorCode as string | undefined) ?? res.statusCode);
-        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: actor(req), ...who(req), message: `Control action ${name}: ${result}`, details: { action: name, result, requestedBy, ...allowedByOf(res) }, ...(target ? { camera: target } : {}) });
+        d.audit.write({ action: 'control-action', category: ['configuration'], type: ['change'], outcome: !done ? 'unknown' : ok ? 'success' : 'failure', user: actor(req), ...who(req), message: `Control action ${name}${hostRestart ? ' (proxy services, all cameras)' : ''}: ${result}`, details: { action: name, ...scope, result, requestedBy, ...allowedByOf(res) }, ...(target && !hostRestart ? { camera: target } : {}) });
       });
     }
     const fail = (status: number, error: string, detail?: string) => send(res, { status, error, ...(detail ? { detail } : {}) });
-    // `restart` without a camera is the host-wide restart: every camera side,
-    // every pending setting (as on one camera; live test of #173). The same on
-    // the old route without a camera named (?cam), also with one camera.
-    if (name === 'restart' && (target === null || (!routed && typeof req.query.cam !== 'string'))) {
+    if (hostRestart) {
       d.restart().catch((err: Error) => logger.error({ err: err.message }, 'restart_failed'));
       return void res.status(202).end();
     }

@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it, vi } from 'vitest';
 import { api, ApiError, errorText, refreshRights } from '../web/src/lib/api';
 import { powerCycleFailText } from '../web/src/lib/maintenance';
 import { ALL_RIGHTS, CEILING_TEXT, LOCKED_TEXT, lockedWhy, MOVE_TEXT, NARROW_TEXT, NO_CEILING_TEXT, narrowWhy, REFUSED_TEXT, resetKeeps, rights, rightsOf, settingLockedWhy, settingsNote, SOME_SETTINGS_TEXT } from '../web/src/lib/rights';
-import { restartToApply } from '../web/src/lib/camera-settings';
+import { restartCamera, restartProxyServices } from '../web/src/lib/restarts';
 
 // Issue #227: a session from a cams-admin sign-in link (managed-admin) sees
 // the local-admin controls off, with one line why; a refusal the proxy
@@ -81,8 +81,10 @@ describe('a refusal shown in words', () => {
     expect(errorText(400, { error: 'invalid', detail: 'sse.pingS: too small' })).toBe('sse.pingS: too small');
     expect(errorText(500, null)).toBe('HTTP 500');
   });
-  it('Restart to apply and the power-cycle show it too', async () => {
-    expect(await restartToApply(async () => { throw new ApiError(403, { error: 'local_admin_only' }); })).toBe(`Restart failed: ${REFUSED_TEXT}`);
+  it('the restarts and the power-cycle show it too', async () => {
+    const refused = async () => { throw new ApiError(403, { error: 'local_admin_only' }); };
+    expect(await restartProxyServices(refused)).toBe(`Restart proxy services: ${REFUSED_TEXT}`);
+    expect(await restartCamera(refused, { cameras: [{ id: 'cam1' }] } as never, null)).toBe(`Restart camera side (cam1): ${REFUSED_TEXT}`);
     expect(powerCycleFailText({ error: 'local_admin_only' })).toBe(`Camera power-cycle: ${REFUSED_TEXT}`);
   });
 });

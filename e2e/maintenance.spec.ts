@@ -3,8 +3,9 @@ import { startFakeAdmin, type FakeAdmin } from '../test/helpers/fake-admin';
 import { ADMIN_TOKEN, POE_SWITCH_PORT, PROXY_PORT } from './env';
 
 // The camera reboot (#83), the power-cycle (through cams-admin, spec
-// 2026-11-07-poe-switches-design) and the proxy restart (#71) from the
-// Maintenance page, behind one confirmation dialog.
+// 2026-11-07-poe-switches-design) and the proxy restarts (#71; services and
+// process, Klaus 2026-11-15) from the Maintenance page, behind one
+// confirmation dialog; the camera's restart (its side only) without one.
 const auth = { Authorization: `Bearer ${ADMIN_TOKEN}` };
 const control = (request: APIRequestContext, path: string) => request.get(`http://127.0.0.1:${PROXY_PORT}${path}`, { headers: auth });
 
@@ -41,7 +42,7 @@ test('Cancel and Esc close the dialog and send nothing; focus stays inside it', 
     if (r.method() === 'POST' && r.url().includes('/control/actions/')) posts.push(r.url());
   });
   await openMaintenance(page);
-  for (const [button, close] of [['action-camera-reboot', 'cancel'], ['action-restart-proxy', 'escape']] as const) {
+  for (const [button, close] of [['action-camera-reboot', 'cancel'], ['action-restart-services', 'cancel'], ['action-restart-proxy', 'escape']] as const) {
     await page.getByTestId(button).click();
     const dialog = page.getByTestId('confirm-dialog');
     await expect(dialog).toBeVisible();
@@ -73,6 +74,48 @@ test('camera reboot: confirm, "Rebooting…", the camera is back', async ({ page
   await settled(request, t0);
 });
 
+// Klaus 2026-11-15: on this one-camera proxy the camera's restart takes the
+// camera's route (only its side restarts); Restart proxy services asks
+// first, posts the host-wide route and applies the host-wide settings the
+// page lists as waiting.
+test('camera restart: the camera route on one camera; Restart proxy services: confirm, the host route, pending settings apply', async ({ page, request }) => {
+  test.setTimeout(120_000);
+  const url = `http://127.0.0.1:${PROXY_PORT}`;
+  const cam = ((await (await control(request, '/control/status')).json()) as { cameras: { id: string }[] }).cameras[0].id;
+  expect((await request.put(`${url}/control/config`, { headers: auth, data: { events: { onvif: { subscribeMin: 3 } } } })).status()).toBe(200);
+  const posts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().includes('/restart')) posts.push(new URL(r.url()).pathname);
+  });
+  try {
+    await openMaintenance(page);
+    await expect(page.getByTestId('restart-pending-host')).toContainText('events.onvif.subscribeMin');
+    await expect(page.getByTestId('action-restart')).toHaveText('Restart camera side (this camera only)');
+    let t0 = Date.now();
+    await page.getByTestId('action-restart').click();
+    await expect(page.getByTestId('action-result')).toContainText(`Restart camera side (${cam}): started`);
+    expect(posts).toEqual([`/control/cameras/${cam}/actions/restart`]);
+    await settled(request, t0);
+    // The camera's restart leaves host-wide settings waiting.
+    await page.getByTestId('refresh').click();
+    await expect(page.getByTestId('restart-pending-host')).toContainText('events.onvif.subscribeMin');
+    await page.getByTestId('action-restart-services').click();
+    await expect(page.getByTestId('confirm-message')).toContainText("all cameras' live view, uploads and recordings pause briefly");
+    t0 = Date.now();
+    await page.getByTestId('confirm-ok').click();
+    await expect(page.getByTestId('action-result')).toContainText('Restart proxy services: started');
+    expect(posts).toEqual([`/control/cameras/${cam}/actions/restart`, '/control/actions/restart']);
+    await expect(page.getByTestId('restart-pending-host')).toBeHidden({ timeout: 30000 });
+    await settled(request, t0);
+  } finally {
+    // Back to the default, applied, for the later specs.
+    await request.delete(`${url}/control/config/events.onvif.subscribeMin`, { headers: auth });
+    const t1 = Date.now();
+    await request.post(`${url}/control/actions/restart`, { headers: auth });
+    await settled(request, t1);
+  }
+});
+
 test('proxy restart: confirm, "Restarting…", the page reloads with the new process', async ({ page, request }) => {
   await openMaintenance(page);
   const before = (await (await request.get('/health')).json()) as { startedAt: number };
@@ -92,7 +135,7 @@ test('proxy restart: confirm, "Restarting…", the page reloads with the new pro
     await route.continue();
   });
   await page.getByTestId('action-restart-proxy').click();
-  await expect(page.getByTestId('confirm-message')).toContainText('Restart the proxy?');
+  await expect(page.getByTestId('confirm-message')).toContainText('Restart the proxy process?');
   await page.getByTestId('confirm-ok').click();
   await expect(page.getByTestId('action-restart-proxy')).toBeDisabled();
   await expect(page.getByTestId('restart-state')).toContainText('Restarting…');
