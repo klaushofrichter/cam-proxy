@@ -22,6 +22,17 @@ test('per-camera settings and actions follow the picker', async ({ page }) => {
   const resp = page.waitForResponse((r) => r.url().includes('/control/cameras/cam4/actions/camera-test'));
   await page.getByTestId('action-camera-test').click();
   expect((await resp).status()).toBe(200);
+  // The camera's restart: the picked camera's route, never the host-wide one (Klaus 2026-11-15).
+  const posts: string[] = [];
+  page.on('request', (r) => {
+    if (r.method() === 'POST' && r.url().includes('/restart')) posts.push(new URL(r.url()).pathname);
+  });
+  const restarted = page.waitForResponse((r) => r.url().includes('/control/cameras/cam4/actions/restart'));
+  await expect(page.getByTestId('action-restart')).toHaveText('Restart camera side (this camera only)');
+  await page.getByTestId('action-restart').click();
+  expect((await restarted).status()).toBe(202);
+  await expect(page.getByTestId('action-result')).toContainText('Restart camera side (cam4): started');
+  expect(posts).toEqual(['/control/cameras/cam4/actions/restart']);
 });
 
 test('Status: storage per camera', async ({ page }) => {

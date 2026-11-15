@@ -1020,7 +1020,7 @@ privacy and cost): [docs/analytics.md](docs/analytics.md).
   before, and lifts an invalid-key pause. It is kept in memory only: never
   written to disk, the config or the logs, and never returned. **It is not
   saved: a restart of the proxy process restores the configured key (or
-  none).** The "Restart camera side" action keeps it. While it is in use the
+  none).** The "Restart camera side" and "Restart proxy services" actions keep it. While it is in use the
   card says "Manual key active (AIza…wXyZ)", and `GET /control/analytics`
   reports `keySource: manual` (else `env` or `none`). Each set is an audit
   record, `secret-override`, with the first and last four characters only.
@@ -1227,7 +1227,7 @@ in the Reolink app, reaches stream clients once as a `camera` message.
 | `PUT /control/secrets/google-vision-key` | `{"key":"..."}` (20 to 200 printable ASCII characters, no spaces; else 400 `invalid`): sets the Google Vision key in memory only, at once, until the process restarts; answers `{keySource: "manual", keyMasked, replaced}`, never the key; audited as `secret-override` |
 | `DELETE /control/config/{path}` | removes one override |
 | `DELETE /control/config` | removes every override at once (Reset to defaults); answers the new view; one `config-change` record with `reset: "all"` |
-| `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started: reconnects to the camera and applies restart settings; the process runs on); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off` (409 `not_configured` only without the FTP password when the camera shows its FTP user or password masked: it would write them back masked); any camera call that fails answers 502 `camera_error` |
+| `POST /control/actions/{name}` | `onvif-resubscribe`, `restart` (202, started: the host-wide restart, "Restart proxy services": every camera side reconnects, go2rtc and the FTP server restart when their settings changed, the pending restart settings apply; the process runs on. `POST /control/cameras/{cam}/actions/restart` restarts only that camera's side and applies its own settings, also on a one-camera proxy; the Maintenance page's camera restart always uses that route. Audited as `control-action` with `scope: proxy` or `scope: camera`); `camera-test`, `retention-run` (`{"dryRun":true}` previews); `camera-ftp-setup`, `camera-ftp-test` (409 `not_configured` without `ftp.publicHost` or the FTP password), `camera-ftp-off` (409 `not_configured` only without the FTP password when the camera shows its FTP user or password masked: it would write them back masked); any camera call that fails answers 502 `camera_error` |
 | `POST /control/actions/camera-reboot` | reboots the camera (offline about a minute; every camera token becomes invalid). 202 `{confirmed}`: `false` when the camera dropped the connection after receiving the request; 429 `too_soon` (with `Retry-After`) within 120 s of the last reboot or power-cycle, or while one is being sent; 502 with the camera error code (`camera_offline`, `camera_auth_failed` or `camera_error`) when the request never reached the camera. The proxy rides it out: it drops its camera token, ONVIF re-subscribes on its own, and `/control/status` shows `camera.reboot` until the camera answers again or 5 minutes pass. Audited as `camera-reboot` |
 | `POST /control/actions/camera-powercycle` | asks cams-admin to power-cycle the camera (spec 2026-11-07-poe-switches-design): one signed `camera.power.cycle.request` event; cams-admin verifies the camera's switch port and runs the cycle through the switch's operating proxy, then answers with `camera.power.cycle.result`. 202 `{requestId}` at once; 409 `power_cycle_needs_cams_admin` when this proxy is not connected to cams-admin or cams-admin has not sent the camera's power; 429 as `camera-reboot` (the 120 s cooldown is shared). `/control/status` shows `camera.reboot` with `kind: powercycle`, `power-cycling` once cams-admin cut the PoE, then `rebooting` until the camera answers. Audited as `camera-powercycle`. See [docs/poe-switch.md](docs/poe-switch.md) |
 | `GET /control/cameras/{cam}/power` | the camera's power as cams-admin sent it (`camera.power.set`: `{kind: poe\|data-only\|adapter\|unknown, switchName, port, watts, verifiedAt, notSeen}`, kept in `<dataDir>/camera-power.json`) or null, `setAt`, the open request `asked: {requestId, at}`, cams-admin's last answer `result: {requestId, ok, reason, at}`, and `canRequest`/`why` |
@@ -1284,15 +1284,27 @@ the phone top bar leaves out (the camera's model, firmware and version, and
   camera through `PUT /control/camera/name`. A Power card shows the
   camera's power as cams-admin sent it (switch and port, verified when).
 - **Maintenance:** the actions, including the camera FTP buttons; the log
-  updates every 10 s. "Reboot camera", "Power-cycle (through cams-admin)"
+  updates every 10 s. Three restarts, each saying what restarts:
+  "Restart camera side (this camera only)" under the camera (the picked
+  camera's side: its live view, stills, events and uploads pause for a few
+  seconds and its pending settings apply; other cameras keep running, also
+  on a one-camera proxy); under Proxy, "Restart proxy services (all
+  cameras)" (every camera side, go2rtc and the FTP server as needed, the
+  pending settings; the process runs on, you stay signed in) and "Restart
+  proxy process" (a new process: every pending setting, you sign in again).
+  Settings waiting for a restart are listed next to the restart that applies
+  them, and that button is highlighted. "Reboot camera", "Power-cycle
+  (through cams-admin)"
   (enabled while cams-admin is connected and has sent the camera's power; it
-  shows "Asked cams-admin…" until cams-admin answers) and "Restart proxy" ask first, in a dialog on the page
-  (Cancel or Esc sends nothing). A switch port's PoE is turned on again
+  shows "Asked cams-admin…" until cams-admin answers) and both proxy restarts ask first, in a dialog on the page
+  (Cancel or Esc sends nothing). The Settings pages' "Restart to apply"
+  button is the camera's restart on Camera settings and Restart proxy
+  services on Proxy settings. A switch port's PoE is turned on again
   under Proxy settings, PoE switches ("Turn PoE on").
   After a reboot the page shows "Rebooting…"
   and the camera's state until it answers again (a power-cycle shows
   "Power-cycling…" while the PoE is off first); after a
-  restart it shows "Restarting…", waits for `/health` to answer with a new
+  process restart it shows "Restarting…", waits for `/health` to answer with a new
   start time or version, and reloads (sign in again: sessions end with the
   process). After 2 minutes without the proxy it says so.
   "Clear the Archive…" deletes every archived clip; its dialog shows the

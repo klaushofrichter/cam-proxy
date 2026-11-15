@@ -324,7 +324,7 @@ camera's address from it).
 
 1. **The Pi's new address** (whatever the new LAN gives it): set
    `PI_ADDRESS=<new pi>` in `config/.env`, then restart (`docker compose restart`, or
-   "Restart proxy" on the Maintenance page at the new address: cam-proxy reads
+   "Restart proxy process" on the Maintenance page at the new address: cam-proxy reads
    the file at start). Then "Point the camera's FTP here", or the camera keeps
    uploading to the old address.
 2. **The camera's new address:** Settings → **Find camera** lists the ONVIF
@@ -357,13 +357,17 @@ certificate still checks offline as long as it hasn't expired.
   2026-09-29: after `reboot`, the proxy was healthy within 5 s of the Pi coming
   back, with the camera up and ONVIF subscribed, and cams reconnected on its own.
   Nothing else needs to autostart.
-- **Restart from the UI or the API:** the Maintenance page's "Restart proxy"
-  (`POST /control/actions/restart-proxy`) stops the proxy gracefully, as
+- **Restart from the UI or the API:** the Maintenance page's "Restart proxy
+  process" (`POST /control/actions/restart-proxy`) stops the proxy gracefully, as
   `docker compose stop` would, and exits with code 0; `restart:
   unless-stopped` starts the container again. If the stop hangs for 15 s the
   proxy exits anyway. Admin sessions end with the process, so the page asks
-  you to sign in again. "Reboot camera" reboots the camera instead; the
-  container keeps running.
+  you to sign in again. "Restart proxy services (all cameras)"
+  (`POST /control/actions/restart`) restarts the camera side and applies
+  pending settings inside the running process; "Restart camera side (this
+  camera only)" (`POST /control/cameras/cam1/actions/restart`) restarts only
+  the camera's side, also here with one camera. "Reboot camera" reboots the
+  camera instead; the container keeps running.
 - **Stopping:** `compose.yaml` gives the container 20 s to stop
   (`stop_grace_period`), not Docker's default 10 s. That is time to end a
   running encode and to store a Vision call that is still in flight (up to
