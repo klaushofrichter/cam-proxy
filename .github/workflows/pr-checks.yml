@@ -32,11 +32,22 @@ jobs:
       # The vendored cams-admin contract equals cams-admin main's (docs/cams-admin.md).
       - name: contract-drift
         run: scripts/contract-drift.sh
-      # Blocking at high for all dependencies, dev included (repository baseline).
-      # No allowlist: there are no open high findings. If one cannot be fixed
-      # by an update or an override, allowlist it by advisory id here, with a
-      # comment and a step that fails once the advisory is gone or fixed.
-      - run: npm audit --audit-level=high
+      # Blocking: what ships (the production image), no exceptions.
+      - run: npm audit --omit=dev --audit-level=high
+      # Blocking too: everything, dev dependencies included, at high. The only
+      # exception is the allowlist .github/audit-allowlist.json, by advisory id:
+      # GHSA-fc5q-39xc-vjpf (`picomatch` via vite and vitest, the build and test
+      # tools; no patched release; approved by Klaus 2026-11-17). The gate also
+      # fails when that advisory disappears, changes its range or a new
+      # `picomatch` release appears, so the entry gets removed once it can be
+      # (scripts/audit-gate.mjs, the same gate as cam-sim's).
+      - name: npm audit (all dependencies, with the allowlist)
+        run: |
+          set -euo pipefail
+          # npm audit exits 1 whenever it finds anything; the gate decides. A
+          # failed audit (no report) fails the gate.
+          npm audit --json > "$RUNNER_TEMP/audit.json" || true
+          node scripts/audit-gate.mjs "$RUNNER_TEMP/audit.json"
       # No camera footage or other media is committed.
       - name: No media files in the repository
         run: |
