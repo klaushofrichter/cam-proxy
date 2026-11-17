@@ -5,7 +5,7 @@ import { join } from 'path';
 import { openCatalog, type Catalog } from '../src/catalog/db';
 import { CameraError } from '../src/camera/client';
 import { PRESET_SLOTS, type PresetSlot, type ReolinkPtz } from '../src/camera/ptz';
-import { FocusAfterGo, GO_FOCUS_CAP_MS, GO_FOCUS_TICK_MS, type FocusOutcome } from '../src/ptz/focus-after-go';
+import { FocusAfterGo, GO_FOCUS_CAP_MS, GO_FOCUS_STILL_MS, GO_FOCUS_TICK_MS, type FocusOutcome } from '../src/ptz/focus-after-go';
 import { MoveLease } from '../src/ptz/lease';
 import { PtzPositions } from '../src/ptz/positions';
 
@@ -88,6 +88,28 @@ describe('FocusAfterGo (focus after going to a saved position)', () => {
     await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 4);
     expect(await p).toBe('self');
     expect(cam.calls.filter((c) => c.startsWith('focus'))).toEqual([]);
+  });
+
+  // Code review 2026-11-17: a camera that starts moving late (after two
+  // ticks) read as settled at the old position, so a go to another zoom got
+  // StartZoomFocus to the OLD zoom, cutting the go short.
+  it('a camera that starts moving late is not settled at the old position: no autofocus to the old zoom', async () => {
+    cam.script = [at(1, 0, 7), at(1, 0, 7), at(1, 0, 7), at(50, 9, 20), at(50, 9, 20)];
+    const p = go(7);
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 6);
+    expect(await p).toBe('self');
+    expect(cam.calls.filter((c) => c.startsWith('focus'))).toEqual([]);
+  });
+
+  it('a go to where the camera already is (it never moves) focuses once it has stood still for 1.5 s', async () => {
+    expect(GO_FOCUS_STILL_MS).toBe(1500);
+    cam.script = [at(1, 0, 7)];
+    const p = go(7);
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_STILL_MS - GO_FOCUS_TICK_MS);
+    expect(cam.calls.filter((c) => c.startsWith('focus'))).toEqual([]);
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS);
+    expect(await p).toBe('focused');
+    expect(cam.calls.filter((c) => c.startsWith('focus'))).toEqual(['focus 7']);
   });
 
   it('polls about every 300 ms, one read (GetPtzCurPos) per tick, nothing before the first tick', async () => {
@@ -231,7 +253,7 @@ describe('PtzPositions.goTo with FocusAfterGo', () => {
     await svc.goTo(a.id);
     await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS);
     await svc.goTo(b.id);
-    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 4);
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_STILL_MS + GO_FOCUS_TICK_MS);
     expect(cam.calls.filter((c) => c.startsWith('focus') || c.startsWith('goto'))).toEqual(['goto 0', 'goto 1', 'focus 7']);
   });
 });

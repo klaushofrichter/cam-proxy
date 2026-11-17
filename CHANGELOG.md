@@ -4,6 +4,8 @@
 
 - CI (internal): the dependency audit is now two blocking steps. What ships (the production dependencies) has no exceptions. The full audit, development tools included, allows one advisory: picomatch GHSA-fc5q-39xc-vjpf (a slow pattern match, high), which reaches cam-proxy only through the build and test tools (vite, vitest) and has no fixed release yet; Klaus approved it on 2026-11-17. The check fails again once a picomatch release or a fix appears, so the exception gets removed.
 - Internal cleanup (/simplify, 2026-11-17), no visible change. An open Maintenance or Settings page no longer makes the proxy re-read every cams-admin settings backup from disk on each refresh, and the start-up checks read the audit log faster. `GET /control/config` now says `restartScope: process` for a setting only a new process applies (before: `host`).
+- Fixes from a code review (2026-11-17):
+  - Going to a saved position: a camera that starts moving a moment late no longer reads as "standing still" at its old place. Before, the proxy could then send a focus to the old zoom, which could cut the go short or leave the camera at the wrong zoom. The proxy now waits until the camera has moved and stopped, or has not moved at all for 1.5 s (a go to where it already is). While it waits it reads only the position (one request instead of two every 300 ms) and the zoom once at the end.
 
 ## v2026.11.15.1
 
