@@ -55,7 +55,7 @@ export const settingPaths = (c: Config): string[] => leafPaths(SETTINGS, '', c.c
 
 // Which settings wait for a restart, and which for a new process: in their
 // own module, so the admin UI can tell them apart too.
-export { needsProcessRestart, needsRestart } from './restart-scope';
+export { needsProcessRestart, needsRestart, restartKind, restartNeed } from './restart-scope';
 
 function merge(base: Obj, over: Obj): Obj {
   const out: Obj = { ...base };

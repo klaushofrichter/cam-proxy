@@ -57,12 +57,12 @@ describe('settings waiting for a restart', () => {
     'cameras.cam1.name': { pending: false, restartScope: 'camera' as const },
     'ftp.port': { pending: true, restartScope: 'host' as const },
     'go2rtc.apiPort': { pending: false, restartScope: 'host' as const },
-    'server.trustProxy': { pending: true, restartScope: 'host' as const },
-    'tls.site': { pending: true },
+    'server.trustProxy': { pending: true, restartScope: 'process' as const },
+    'server.port': { pending: true, restartScope: 'process' as const },
     'sse.pingS': { pending: false },
   };
   it('by what applies them: the camera\'s restart, the proxy services restart, a new process', () => {
-    expect(pendingRestarts(view, 'cam1')).toEqual({ camera: ['cameras.cam1.statusPollS'], cameras: ['cameras.cam1.statusPollS', 'cameras.cam2.statusPollS'], host: ['ftp.port'], process: ['server.trustProxy', 'tls.site'] });
+    expect(pendingRestarts(view, 'cam1')).toEqual({ camera: ['cameras.cam1.statusPollS'], cameras: ['cameras.cam1.statusPollS', 'cameras.cam2.statusPollS'], host: ['ftp.port'], process: ['server.trustProxy', 'server.port'] });
     expect(pendingRestarts(view, null).camera).toEqual([]);
     expect(pendingRestarts({}, 'cam1')).toEqual({ camera: [], cameras: [], host: [], process: [] });
   });
@@ -70,8 +70,8 @@ describe('settings waiting for a restart', () => {
 
 describe("the Settings page's restart badge", () => {
   it('names the restart that applies the setting', () => {
-    expect(restartBadgeTitle('cameras.cam1.statusPollS', 'camera')).toBe("applies after this camera's restart (Restart camera side) or Restart proxy services");
-    expect(restartBadgeTitle('ftp.port', 'host')).toBe('applies after Restart proxy services (Maintenance → Proxy; every camera side restarts)');
-    expect(restartBadgeTitle('server.port', 'host')).toMatch(/^applies after Restart proxy process/);
+    expect(restartBadgeTitle('camera')).toBe("applies after this camera's restart (Restart camera side) or Restart proxy services");
+    expect(restartBadgeTitle('host')).toBe('applies after Restart proxy services (Maintenance → Proxy; every camera side restarts)');
+    expect(restartBadgeTitle('process')).toMatch(/^applies after Restart proxy process/);
   });
 });

@@ -4,7 +4,6 @@
 // The proxy's restarts are host-wide: "Restart proxy services" (every
 // camera side, go2rtc and the FTP server as needed, the pending settings;
 // the process runs on) and "Restart proxy process" (a new process).
-import { needsProcessRestart } from '../../../src/config/restart-scope';
 import { cameraIds, pickCamera } from './cameras';
 import type { Status } from './status-types';
 
@@ -49,13 +48,14 @@ export async function restartProxyServices(api: Api): Promise<string> {
 // applies them: `camera` the picked camera's restart, `cameras` every
 // camera's (all of them also apply with Restart proxy services), `host`
 // Restart proxy services, `process` only a new process (Restart proxy process).
-export interface PendingSetting { pending: boolean; restartScope?: 'camera' | 'host' }
+export type RestartScope = 'camera' | 'host' | 'process';
+export interface PendingSetting { pending: boolean; restartScope?: RestartScope }
 export interface PendingRestarts { camera: string[]; cameras: string[]; host: string[]; process: string[] }
 export function pendingRestarts(view: Record<string, PendingSetting>, cam: string | null): PendingRestarts {
   const out: PendingRestarts = { camera: [], cameras: [], host: [], process: [] };
   for (const [p, s] of Object.entries(view)) {
     if (!s.pending) continue;
-    if (needsProcessRestart(p)) out.process.push(p);
+    if (s.restartScope === 'process') out.process.push(p);
     else if (s.restartScope === 'camera') {
       out.cameras.push(p);
       if (cam && p.startsWith(`cameras.${cam}.`)) out.camera.push(p);
@@ -65,8 +65,8 @@ export function pendingRestarts(view: Record<string, PendingSetting>, cam: strin
 }
 
 // The Settings page's "restart" badge: which restart applies the setting.
-export function restartBadgeTitle(path: string, scope: 'camera' | 'host' | undefined): string {
-  if (needsProcessRestart(path)) return 'applies after Restart proxy process (Maintenance → Proxy): it is read when the process starts';
+export function restartBadgeTitle(scope: RestartScope | undefined): string {
+  if (scope === 'process') return 'applies after Restart proxy process (Maintenance → Proxy): it is read when the process starts';
   if (scope === 'camera') return "applies after this camera's restart (Restart camera side) or Restart proxy services";
   return 'applies after Restart proxy services (Maintenance → Proxy; every camera side restarts)';
 }
