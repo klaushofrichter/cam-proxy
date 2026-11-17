@@ -152,7 +152,7 @@ export class CameraWorker extends EventEmitter {
       read: () => readCameraFtp(this.client),
       target: d.ftpTarget,
       // Its last record is this camera's (a record without a camera: from before several cameras).
-      audit: { write: this.audit.write, find: (pred, days) => d.audit.find((r) => pred(r) && ((r.labels as { camera?: string } | undefined)?.camera ?? this.id) === this.id, days) },
+      audit: { write: this.audit.write, find: (pred, days, actions) => d.audit.find((r) => pred(r) && ((r.labels as { camera?: string } | undefined)?.camera ?? this.id) === this.id, days, actions) },
       active: () => this.cam().ftp.enabled && this.status.state().online,
       clipsBefore: () => lastClipReceived(d.catalog, this.id) !== null,
       everyMs: d.cameraFtpCheckMs,

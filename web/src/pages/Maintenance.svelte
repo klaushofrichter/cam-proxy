@@ -5,11 +5,11 @@
   import { api, ApiError } from '../lib/api';
   import { MB, mbText } from '../lib/format';
   import { REPAIR_MAX_BYTES, REPAIR_MAX_CLIPS } from '../lib/inventory';
-  import { powerCycleDisabled, powerCycleFailText, powerWhyText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
+  import { maintenancePoll, powerCycleDisabled, powerCycleFailText, powerWhyText, powerCycleMessage, powerResultText, readHealth, rebootEndText, waitForNewProxy, type PowerView } from '../lib/maintenance';
   import { refresh, refreshTick, status } from '../lib/state';
   import { clearMatches, clearMessage } from '../lib/archive';
   import { actionPath, blockOf, pickCamera, cameraIds, powerPath, selectedCamera } from '../lib/cameras';
-  import { pendingRestarts, restartCamera, restartProxyServices, PROXY_PROCESS_RESTART, type PendingSetting } from '../lib/restarts';
+  import { pendingRestarts, reloadAfterRestart, restartCamera, restartProxyServices, PROXY_PROCESS_RESTART, type PendingSetting } from '../lib/restarts';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from '../components/LockedNote.svelte';
   // The actions that act on a camera: the picked one when there are several.
@@ -25,7 +25,8 @@
   const restartLocked = $derived(lockedWhy($rights, 'restart'));
   let log = $state<Array<Record<string, unknown>>>([]);
   const loadLog = async () => (log = (await api<Array<Record<string, unknown>>>('GET', '/control/log?limit=200')).reverse());
-  // The settings waiting for a restart, by what applies them (GET /control/config).
+  // The settings waiting for a restart, by what applies them (GET /control/config):
+  // read on mount, after a restart and with the top bar's Refresh, not polled.
   let settings = $state<Record<string, PendingSetting>>({});
   const loadSettings = async () => {
     try {
@@ -40,21 +41,20 @@
     void loadLog();
     void loadSettings();
   });
-  // The log follows along by itself (every 10 s), and with the top bar's Refresh.
+  // The log follows along by itself (every 10 s); both with the top bar's Refresh.
   $effect(() => {
     if ($refreshTick) {
       void loadLog();
       void loadSettings();
     }
   });
-  $effect(() => {
-    const t = setInterval(() => {
-      if (document.visibilityState === 'hidden') return;
-      void loadLog();
-      void loadSettings();
-    }, 10_000);
-    return () => clearInterval(t);
-  });
+  $effect(() => maintenancePoll(() => void loadLog()));
+  let stopReload: (() => void) | undefined;
+  const reloadSettings = () => {
+    stopReload?.();
+    stopReload = reloadAfterRestart(() => void loadSettings());
+  };
+  onMount(() => () => stopReload?.());
 
   async function run(label: string, name: string, body?: unknown) {
     try {
@@ -72,7 +72,7 @@
     result = await restartCamera(api, $status, $selectedCamera);
     void refresh();
     void loadLog();
-    setTimeout(() => void loadSettings(), 1500);
+    reloadSettings();
   }
   // The proxy's services restart (every camera side, the pending settings; the process runs on).
   async function restartServices() {
@@ -80,7 +80,7 @@
     result = await restartProxyServices(api);
     void refresh();
     void loadLog();
-    setTimeout(() => void loadSettings(), 3000);
+    reloadSettings();
   }
 
   // The camera reboot (#83), the power-cycle (#85) and the proxy restarts

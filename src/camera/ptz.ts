@@ -90,15 +90,18 @@ export class ReolinkPtz {
     return pos;
   }
 
-  // The pan/tilt position, in the camera's own units (GetPtzCurPos; it takes
-  // {PtzCurPos: {channel}}, a plain {channel} is refused with -1, measured on
-  // the E1 2026-11-14). Only for telling whether a move has stopped.
-  async position(): Promise<{ pan: number; tilt: number }> {
-    const r = (await this.command('GetPtzCurPos', { PtzCurPos: { channel: 0 } })) as { PtzCurPos?: { Ppos?: unknown; Tpos?: unknown } } | undefined;
+  // The pan/tilt/zoom position, in the camera's own units (GetPtzCurPos; it
+  // takes {PtzCurPos: {channel}}, a plain {channel} is refused with -1,
+  // measured on the E1 2026-11-14). Zpos is on another scale than
+  // GetZoomFocus's zoom (500 vs. the zoom step), so it is only for telling
+  // whether a move has stopped, never for focusAt.
+  async position(): Promise<{ pan: number; tilt: number; zoom?: number }> {
+    const r = (await this.command('GetPtzCurPos', { PtzCurPos: { channel: 0 } })) as { PtzCurPos?: { Ppos?: unknown; Tpos?: unknown; Zpos?: unknown } } | undefined;
     const pan = r?.PtzCurPos?.Ppos;
     const tilt = r?.PtzCurPos?.Tpos;
+    const zoom = r?.PtzCurPos?.Zpos;
     if (typeof pan !== 'number' || typeof tilt !== 'number') throw new CameraError('camera_error', 'GetPtzCurPos gave no position', true);
-    return { pan, tilt };
+    return typeof zoom === 'number' ? { pan, tilt, zoom } : { pan, tilt };
   }
 
   async goTo(slot: number): Promise<void> {

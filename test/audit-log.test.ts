@@ -311,6 +311,21 @@ describe('AuditLog files', () => {
     expect(log.find((r) => r.message === 's1', 10)?.message).toBe('s1');
     expect(log.find((r) => r.message === 's10', 0)?.message).toBe('s10');
   });
+
+  it('find with actions: the same record, and lines naming other actions are not parsed', () => {
+    const now = { t: Date.UTC(2026, 8, 1, 1) };
+    const { log } = make(now);
+    log.write({ ...base, action: 'proxy-start', message: 'start' });
+    for (let i = 0; i < 5; i++) log.write({ ...base, action: 'login', message: `l${i}` });
+    const pred = (r: { event: { action: string } }) => r.event.action === 'proxy-start';
+    const parse = vi.spyOn(JSON, 'parse');
+    expect(log.find(pred, 2)?.message).toBe('start');
+    const all = parse.mock.calls.length;
+    parse.mockClear();
+    expect(log.find(pred, 2, ['proxy-start', 'proxy-stop'])?.message).toBe('start');
+    expect(parse.mock.calls.length).toBe(1);
+    expect(all).toBe(6);
+  });
 });
 
 describe('AuditLog.list day skipping', () => {

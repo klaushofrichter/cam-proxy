@@ -40,10 +40,13 @@ export function blockOf(s: Status | null, id: string | null): CameraBlock | null
   return found ?? { id: s.cameras?.[0]?.id ?? '', camera: s.camera, intake: s.intake, stream: s.stream, ftp: s.ftp, recordings: s.recordings };
 }
 
+// A camera's own route, /control/cameras/<id>/<suffix>.
+export const cameraRoute = (cam: string, suffix: string): string => `/control/cameras/${encodeURIComponent(cam)}/${suffix}`;
+
 // The picked camera's power as cams-admin sent it (spec 2026-11-07-poe-switches-design); null before the status is known.
 export function powerPath(s: Status | null, selected: string | null): string | null {
   const cam = pickCamera(cameraIds(s), selected);
-  return cam ? `/control/cameras/${encodeURIComponent(cam)}/power` : null;
+  return cam ? cameraRoute(cam, 'power') : null;
 }
 
 // Where a camera action goes: the old route on a one-camera proxy (or an
@@ -52,5 +55,5 @@ export function powerPath(s: Status | null, selected: string | null): string | n
 export function actionPath(s: Status | null, selected: string | null, name: string): string {
   const ids = cameraIds(s);
   const cam = ids.length > 1 ? pickCamera(ids, selected) : null;
-  return cam ? `/control/cameras/${encodeURIComponent(cam)}/actions/${name}` : `/control/actions/${name}`;
+  return cam ? cameraRoute(cam, `actions/${name}`) : `/control/actions/${name}`;
 }

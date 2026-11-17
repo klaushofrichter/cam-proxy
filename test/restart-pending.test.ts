@@ -25,6 +25,7 @@ describe('applying pending restart settings with several cameras', () => {
     expect((await request(p.base).put('/control/config').set(admin()).send({ cameras: { cam3: { statusPollS: 9 }, cam4: { statusPollS: 7 } } })).status).toBe(200);
     const v = await view();
     expect([v['cameras.cam4.statusPollS'].pending, v['cameras.cam4.statusPollS'].restartScope]).toEqual([true, 'camera']);
+    expect(v['server.port'].restartScope).toBe('process'); // only a new process applies it
     expect((await request(p.base).post('/control/cameras/cam4/actions/restart').set(admin())).status).toBe(202);
     await until(async () => (await view())['cameras.cam4.statusPollS'].pending === false, 15_000);
     expect(p.proxy.running.cameras.cam4.statusPollS).toBe(7);

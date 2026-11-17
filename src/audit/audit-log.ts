@@ -127,10 +127,7 @@ export class AuditLog {
     const c = cur(up ? q.after : q.before);
     const days = this.days();
     const out: AuditRecord[] = [];
-    // A line can match only if it names a wanted action: the others are not
-    // parsed (#106: the inventories read days of records for a few actions).
-    // JSON.stringify writes `"action":"<name>"`, so this never drops a match.
-    const needles = q.actions?.map((a) => `"action":${JSON.stringify(a)}`);
+    const needles = actionNeedles(q.actions);
     const ok = (r: AuditRecord) => {
       const t = Date.parse(r['@timestamp']);
       return (!q.actions || q.actions.includes(r.event?.action)) && (!q.outcome || r.event?.outcome === q.outcome) && (q.from === undefined || t >= q.from) && (q.to === undefined || t <= q.to);
@@ -158,12 +155,16 @@ export class AuditLog {
     return { records, next: last ?? (up ? (q.after || null) : null), hasMore };
   }
 
-  find(pred: (r: AuditRecord) => boolean, days = 2): AuditRecord | undefined {
+  // The newest record of the last `days` day files that `pred` accepts.
+  // `actions`: pred accepts only these, so other lines are not parsed.
+  find(pred: (r: AuditRecord) => boolean, days = 2, actions?: string[]): AuditRecord | undefined {
     const all = this.days();
     if (!all.length) return undefined;
     const cutoff = addDays(all.at(-1)!, -(Math.max(1, Math.floor(days) || 1) - 1));
+    const needles = actionNeedles(actions);
     for (const day of all.filter((d) => d >= cutoff).reverse()) {
       for (const l of this.lines(day).reverse()) {
+        if (needles && !needles.some((x) => l.includes(x))) continue;
         const r = parse(l);
         if (r && pred(r)) return r;
       }
@@ -279,6 +280,11 @@ export class AuditLog {
     } catch { return []; }
   }
 }
+
+// A line can match only if it names a wanted action: the others need not be
+// parsed (#106: the inventories read days of records for a few actions).
+// JSON.stringify writes `"action":"<name>"`, so this never drops a match.
+const actionNeedles = (actions: string[] | undefined) => actions?.map((a) => `"action":${JSON.stringify(a)}`);
 
 function parse(line: string | undefined): AuditRecord | null {
   if (!line) return null;

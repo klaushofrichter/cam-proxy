@@ -3,7 +3,7 @@
   import { cameraNameProblem, CAMERA_NAME_MAX, nameSaveError } from '../lib/camera-name';
   import { blockOf, cameraIds, multiCamera, pickCamera, selectedCamera } from '../lib/cameras';
   import { cameraPath, settingGroups } from '../lib/camera-settings';
-  import { pendingRestarts, restartBadgeTitle, restartCamera, restartProxyServices } from '../lib/restarts';
+  import { pendingRestarts, restartBadgeTitle, restartCamera, restartProxyServices, type RestartScope } from '../lib/restarts';
   import AddCameraCard from '../components/AddCameraCard.svelte';
   import { onMount } from 'svelte';
   import { api, ApiError } from '../lib/api';
@@ -28,7 +28,7 @@
 
   // `env`: the variable that sets it (source env: read-only here).
   // `legacy`: read from a legacy `camera` object in config.json.
-  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: 'camera' | 'host'; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number }; ignored?: string }
+  interface Setting { value: unknown; source: 'default' | 'file' | 'override' | 'env'; env?: string; restart: boolean; restartScope?: RestartScope; pending: boolean; next?: unknown; type?: SettingType; resetTo?: ResetTo; legacy?: true; by?: { cmdId: string; actor: string; at: number }; ignored?: string }
   // Two pages (Klaus 2026-11-06): the proxy's settings, and the settings of
   // the camera picked in the top bar.
   let { scope = 'proxy' }: { scope?: 'proxy' | 'camera' } = $props();
@@ -284,7 +284,7 @@
                 {#if !locked && (dirWhy ?? resetDirWhy)}<div class="env-note" data-testid="dir-note-{p}">{dirWhy ?? resetDirWhy}</div>{/if}
                 {#if rowErrors[p]}<div class="field-error" data-testid="error-{p}">{rowErrors[p]}</div>{/if}
               </td>
-              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={restartBadgeTitle(p, s.restartScope)}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
+              <td><span class="badge {s.source}" class:same={!!same} data-testid="source-{p}" title={same?.title}>{same ? same.text : s.legacy ? 'config.json (legacy camera)' : s.source}</span>{#if s.restart}<span class="badge restart" title={restartBadgeTitle(s.restartScope)}>restart</span>{/if}{#if s.pending}<span class="badge pending">next: {shown(s.next)}</span>{/if}{#if s.by}<span class="badge by" data-testid="by-{p}">{byText(s.by)}</span> <button class="link" onclick={() => (undoing = { path: p, cmdId: s.by!.cmdId, actor: s.by!.actor })} disabled={!!undoLocked} title={undoLocked ?? undefined} data-testid="undo-{p}">Undo</button>{/if}</td>
               <td class="actions">
                 {#if drafts[p] !== undefined}<button onclick={() => void save(p)} disabled={!!locked || !!dirWhy} title={locked ?? dirWhy ?? undefined} data-testid="save-{p}">Save</button>{/if}
                 {#if s.source === 'override' && !same}<button onclick={() => void reset(p)} disabled={!!locked || !!resetDirWhy} title={locked ?? resetDirWhy ?? undefined} data-testid="reset-{p}">{resetLabel(p, s.resetTo && { ...s.resetTo, means: undefined })}{#if s.resetTo?.means}{' '}<span class="means">({s.resetTo.means})</span>{/if}</button>{/if}

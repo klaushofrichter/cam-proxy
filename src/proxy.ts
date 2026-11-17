@@ -1714,7 +1714,7 @@ export function createProxy(initial: Loaded, opts: ProxyOptions = {}): Proxy {
       }
       analytics.catchUp();
       // The newest start or stop: a start means the last run did not stop cleanly.
-      const prev = audit.find((r) => r.event.action === 'proxy-start' || r.event.action === 'proxy-stop', 400);
+      const prev = audit.find((r) => r.event.action === 'proxy-start' || r.event.action === 'proxy-stop', 400, ['proxy-start', 'proxy-stop']);
       const uncleanStop = prev?.event.action === 'proxy-start';
       const previousStop = prev && !uncleanStop ? prev['@timestamp'] : null;
       audit.write({ action: 'proxy-start', category: ['process'], type: ['start'], outcome: 'success', user: 'system', message: `cam-proxy ${VERSION} started`, details: { config: { camera: cams.list()[0]?.id ?? null, cameras: cams.ids(), stills: running.stills.enabled, ftp: running.ftp.enabled, analytics: running.analytics.googleVision.enabled }, previousStop, uncleanStop } });

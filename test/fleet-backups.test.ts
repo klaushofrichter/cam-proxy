@@ -1,4 +1,4 @@
-import { mkdtempSync, readdirSync, statSync, writeFileSync } from 'fs';
+import { fstatSync, mkdtempSync, readdirSync, statSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { describe, expect, it } from 'vitest';
@@ -66,6 +66,32 @@ describe('OverridesBackups', () => {
     expect(b.get(CMD(3))).toBeNull();
     expect(b.list().map((x) => x.cmdId)).toEqual([CMD(1)]);
     expect(q.lines.length).toBeGreaterThan(0);
+  });
+  it('list and byPath read the files once; a save, rollback mark or remove is seen by the next call', () => {
+    const d = dir();
+    const b = new OverridesBackups(d);
+    b.save(backup(1));
+    b.save(backup(2, 2000, [{ path: 'stills.quality', before: { set: false }, after: { set: true, value: 30 } }]));
+    let reads = 0;
+    privateFileHooks.fstat = (fd) => (reads++, fstatSync(fd));
+    try {
+      const fresh = new OverridesBackups(d);
+      expect(fresh.list().map((x) => x.cmdId)).toEqual([CMD(2), CMD(1)]);
+      const once = reads;
+      expect(once).toBeGreaterThan(0);
+      fresh.list();
+      fresh.byPath();
+      fresh.byPath();
+      expect(reads).toBe(once); // served from memory
+      fresh.markRolledBack(CMD(2), { at: 3000, by: 'local', user: 'admin' });
+      expect(fresh.byPath().has('stills.quality')).toBe(false);
+      fresh.save(backup(3, 3000));
+      expect(fresh.list().map((x) => x.cmdId)).toEqual([CMD(3), CMD(2), CMD(1)]);
+      fresh.remove(CMD(3));
+      expect(fresh.list().map((x) => x.cmdId)).toEqual([CMD(2), CMD(1)]);
+    } finally {
+      delete privateFileHooks.fstat;
+    }
   });
   it('a cmdId must be a command id: a traversal id throws before any file name is built', () => {
     const b = new OverridesBackups(dir());
