@@ -175,7 +175,7 @@ export class CameraFtpWatch {
   }
 
   private lastRecorded(): { state: string } | null {
-    const r = this.d.audit.find((x) => x.event?.action === 'camera-check' && x.cam_proxy?.check === 'ftp', 90);
+    const r = this.d.audit.find((x) => x.event?.action === 'camera-check' && x.cam_proxy?.check === 'ftp', 90, ['camera-check']);
     const to = r?.cam_proxy?.to as { state?: unknown } | undefined;
     return to && typeof to.state === 'string' ? (to as { state: string }) : null;
   }

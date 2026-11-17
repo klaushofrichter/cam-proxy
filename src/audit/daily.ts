@@ -128,7 +128,7 @@ export class DailyAudit {
       const a = r.event?.action;
       if ((a === 'storage-daily' || a === 'activity-daily') && r.cam_proxy?.day === day && (!ti || r.cam_proxy?.dayBasis !== 'utc')) found.add(a);
       return found.size === 2;
-    }, 3);
+    }, 3, ['storage-daily', 'activity-daily']);
     const mark = ti ? {} : { dayBasis: 'utc' };
     const prev = addDays(day, -1);
     let ok = true; // a write that failed (null) is tried again next tick
