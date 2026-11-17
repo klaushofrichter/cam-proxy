@@ -6,6 +6,7 @@
 - Internal cleanup (/simplify, 2026-11-17), no visible change. An open Maintenance or Settings page no longer makes the proxy re-read every cams-admin settings backup from disk on each refresh, and the start-up checks read the audit log faster. `GET /control/config` now says `restartScope: process` for a setting only a new process applies (before: `host`).
 - Fixes from a code review (2026-11-17):
   - Going to a saved position: a camera that starts moving a moment late no longer reads as "standing still" at its old place. Before, the proxy could then send a focus to the old zoom, which could cut the go short or leave the camera at the wrong zoom. The proxy now waits until the camera has moved and stopped, or has not moved at all for 1.5 s (a go to where it already is). While it waits it reads only the position (one request instead of two every 300 ms) and the zoom once at the end.
+  - Maintenance page: an open page no longer asks the proxy for all settings every 10 s. The list of settings waiting for a restart is read when the page opens, with the top bar's Refresh, and a few times after a restart (the log still follows along every 10 s).
 
 ## v2026.11.15.1
 

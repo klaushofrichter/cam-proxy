@@ -1,8 +1,11 @@
 // Klaus 2026-11-15: separate camera and proxy restart. The Maintenance
 // page's camera restart always takes the camera's own route (also on a
 // one-camera proxy, the Pi); the proxy's restarts are host-wide, under Proxy.
-import { describe, expect, it } from 'vitest';
-import { pendingRestarts, restartBadgeTitle, restartCamera, restartProxyServices, PROXY_PROCESS_RESTART, PROXY_SERVICES_RESTART } from '../web/src/lib/restarts';
+import { readFileSync } from 'fs';
+import { join } from 'path';
+import { afterEach, describe, expect, it, vi } from 'vitest';
+import { maintenancePoll, MAINTENANCE_POLL_MS } from '../web/src/lib/maintenance';
+import { pendingRestarts, reloadAfterRestart, restartBadgeTitle, restartCamera, restartProxyServices, PROXY_PROCESS_RESTART, PROXY_SERVICES_RESTART, RESTART_RELOAD_MS } from '../web/src/lib/restarts';
 
 const cam = (id: string) => ({ id, camera: { name: id, online: true, since: 0 }, intake: { onvif: 'subscribed', since: 0, source: 'onvif', resubscribes: 0 }, stream: { enabled: true, up: true, go2rtcUp: true, lastFrameTs: 1 }, ftp: { enabled: false } });
 const status = (ids: string[]) => ({ version: 'v', camera: cam(ids[0]).camera, intake: cam(ids[0]).intake, stream: cam(ids[0]).stream, ftp: cam(ids[0]).ftp, cameras: ids.map(cam) }) as never;
@@ -72,5 +75,56 @@ describe("the Settings page's restart badge", () => {
     expect(restartBadgeTitle('camera')).toBe("applies after this camera's restart (Restart camera side) or Restart proxy services");
     expect(restartBadgeTitle('host')).toBe('applies after Restart proxy services (Maintenance → Proxy; every camera side restarts)');
     expect(restartBadgeTitle('process')).toMatch(/^applies after Restart proxy process/);
+  });
+});
+
+// Code review 2026-11-17: the restart split put GET /control/config into the
+// Maintenance page's 10 s poll. The pending-restart lists change only with a
+// settings save or a restart, so they are read on mount, after a restart and
+// with the top bar's Refresh; the poll follows the log only.
+describe('Maintenance page: the 10 s poll', () => {
+  afterEach(() => vi.useRealTimers());
+
+  it('follows the log every 10 s while the page is visible, and nothing else', () => {
+    vi.useFakeTimers();
+    let visible = true;
+    const log = vi.fn();
+    const stop = maintenancePoll(log, () => visible);
+    expect(MAINTENANCE_POLL_MS).toBe(10_000);
+    vi.advanceTimersByTime(MAINTENANCE_POLL_MS * 3);
+    expect(log).toHaveBeenCalledTimes(3);
+    visible = false;
+    vi.advanceTimersByTime(MAINTENANCE_POLL_MS);
+    expect(log).toHaveBeenCalledTimes(3);
+    stop();
+    visible = true;
+    vi.advanceTimersByTime(MAINTENANCE_POLL_MS * 2);
+    expect(log).toHaveBeenCalledTimes(3);
+  });
+
+  it('the page polls with maintenancePoll, and no timer of the page reads the settings', () => {
+    const src = readFileSync(join(__dirname, '..', 'web', 'src', 'pages', 'Maintenance.svelte'), 'utf8');
+    expect(src).toContain('maintenancePoll(');
+    const timers = src.match(/setInterval\([\s\S]*?\}, [\d_]+\)/g) ?? [];
+    for (const t of timers) expect(t).not.toContain('loadSettings');
+  });
+
+  it('after a restart the pending lists are read a few times, as it runs on after its answer; stop ends it', () => {
+    vi.useFakeTimers();
+    const load = vi.fn();
+    reloadAfterRestart(load);
+    expect(RESTART_RELOAD_MS).toEqual([1500, 4000, 10_000]);
+    vi.advanceTimersByTime(1500);
+    expect(load).toHaveBeenCalledTimes(1);
+    vi.advanceTimersByTime(10_000);
+    expect(load).toHaveBeenCalledTimes(3);
+    vi.advanceTimersByTime(60_000);
+    expect(load).toHaveBeenCalledTimes(3);
+    const again = vi.fn();
+    const stop = reloadAfterRestart(again);
+    vi.advanceTimersByTime(1500);
+    stop();
+    vi.advanceTimersByTime(60_000);
+    expect(again).toHaveBeenCalledTimes(1);
   });
 });

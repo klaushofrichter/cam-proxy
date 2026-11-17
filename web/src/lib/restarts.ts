@@ -58,6 +58,14 @@ export function pendingRestarts(view: Record<string, PendingSetting>, cam: strin
   return out;
 }
 
+// A restart runs on after its answer, so the pending lists are read again a
+// few times after it (the page no longer polls them). Returns a stop.
+export const RESTART_RELOAD_MS = [1500, 4000, 10_000];
+export function reloadAfterRestart(load: () => void, delays = RESTART_RELOAD_MS): () => void {
+  const timers = delays.map((ms) => setTimeout(load, ms));
+  return () => timers.forEach(clearTimeout);
+}
+
 // The Settings page's "restart" badge: which restart applies the setting.
 export function restartBadgeTitle(scope: RestartScope | undefined): string {
   if (scope === 'process') return 'applies after Restart proxy process (Maintenance → Proxy): it is read when the process starts';
