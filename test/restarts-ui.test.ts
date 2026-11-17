@@ -2,7 +2,7 @@
 // page's camera restart always takes the camera's own route (also on a
 // one-camera proxy, the Pi); the proxy's restarts are host-wide, under Proxy.
 import { describe, expect, it } from 'vitest';
-import { cameraRestartPath, pendingRestarts, restartBadgeTitle, restartCamera, restartProxyServices, PROXY_PROCESS_RESTART, PROXY_SERVICES_RESTART } from '../web/src/lib/restarts';
+import { pendingRestarts, restartBadgeTitle, restartCamera, restartProxyServices, PROXY_PROCESS_RESTART, PROXY_SERVICES_RESTART } from '../web/src/lib/restarts';
 
 const cam = (id: string) => ({ id, camera: { name: id, online: true, since: 0 }, intake: { onvif: 'subscribed', since: 0, source: 'onvif', resubscribes: 0 }, stream: { enabled: true, up: true, go2rtcUp: true, lastFrameTs: 1 }, ftp: { enabled: false } });
 const status = (ids: string[]) => ({ version: 'v', camera: cam(ids[0]).camera, intake: cam(ids[0]).intake, stream: cam(ids[0]).stream, ftp: cam(ids[0]).ftp, cameras: ids.map(cam) }) as never;
@@ -12,16 +12,15 @@ const recorder = () => {
 };
 
 describe('the camera restart: always the camera route', () => {
-  it('one camera (the Pi) and several: the picked camera\'s route, never the host-wide one', () => {
-    expect(cameraRestartPath(status(['cam1']), null)).toBe('/control/cameras/cam1/actions/restart');
-    expect(cameraRestartPath(status(['cam1']), 'gone')).toBe('/control/cameras/cam1/actions/restart');
-    expect(cameraRestartPath(status(['cam3', 'cam4']), 'cam4')).toBe('/control/cameras/cam4/actions/restart');
-    expect(cameraRestartPath(status(['cam3', 'cam4']), 'gone')).toBe('/control/cameras/cam3/actions/restart');
-    expect(cameraRestartPath(status(['a b']), null)).toBe('/control/cameras/a%20b/actions/restart');
+  it('one camera (the Pi) and several: the picked camera\'s route, never the host-wide one', async () => {
+    const r = recorder();
+    for (const [ids, sel] of [[['cam1'], null], [['cam1'], 'gone'], [['cam3', 'cam4'], 'cam4'], [['cam3', 'cam4'], 'gone'], [['a b'], null]] as const) await restartCamera(r.api, status([...ids]), sel);
+    expect(r.calls).toEqual(['cam1', 'cam1', 'cam4', 'cam3', 'a%20b'].map((c) => `POST /control/cameras/${c}/actions/restart`));
   });
-  it('no camera known (no status yet, or none configured): no path', () => {
-    expect(cameraRestartPath(null, null)).toBeNull();
-    expect(cameraRestartPath({ ...(status(['cam1']) as object), cameras: [] } as never, null)).toBeNull();
+  it('no camera known (no status yet, or none configured): nothing posted', async () => {
+    const r = recorder();
+    expect(await restartCamera(r.api, { ...(status(['cam1']) as object), cameras: [] } as never, null)).toBe('Restart camera side: no camera');
+    expect(r.calls).toEqual([]);
   });
   it('posts the camera route on one camera and on several; answers a line naming the camera; never throws', async () => {
     const one = recorder();
