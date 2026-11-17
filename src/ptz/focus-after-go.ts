@@ -9,6 +9,7 @@
 // the lease's command queue under the go's mark: any later PTZ action (move,
 // zoom, focus, stop, another go, autofocus) changes the mark and ends it, so
 // it never fights the user.
+import { sleep } from '../async';
 import type { ReolinkPtz } from '../camera/ptz';
 import { errorMessage, logger } from '../log';
 import type { MoveLease } from './lease';
@@ -25,10 +26,6 @@ export interface FocusAfterGoDeps {
   lease: Pick<MoveLease, 'mark' | 'current' | 'runIf'>;
   ptz: Pick<ReolinkPtz, 'position' | 'zoomPos' | 'focusAt'>;
   enabled: () => boolean; // capabilities.ptz.autofocus
-}
-
-function sleep(ms: number): Promise<void> {
-  return new Promise((r) => setTimeout(r, ms).unref());
 }
 
 export class FocusAfterGo {
@@ -66,7 +63,7 @@ export class FocusAfterGo {
     let zoom = before;
     try {
       for (;;) {
-        await sleep(GO_FOCUS_TICK_MS);
+        await sleep(GO_FOCUS_TICK_MS, undefined, { unref: true });
         if (!lease.current(mark)) return 'cancelled';
         if (Date.now() > end) return 'timeout';
         let reading = '';

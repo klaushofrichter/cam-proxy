@@ -1,4 +1,4 @@
-import { getPath, needsProcessRestart, needsRestart, settingPaths, type Loaded, type Source } from './load';
+import { getPath, restartNeed, settingPaths, type Loaded, type Source } from './load';
 import { jsonEqual as same } from '../util/obj';
 
 // One changed leaf setting between two configurations: the Settings page's
@@ -13,13 +13,14 @@ export function configChanges(before: Loaded, after: Loaded): Change[] {
     const from = getPath(before.config, p);
     const to = getPath(after.config, p);
     if (same(from, to)) continue;
+    const restart = restartNeed(p);
     out.push({
       path: p,
       ...(from !== undefined ? { from } : {}),
       ...(to !== undefined ? { to } : {}),
       sourceFrom: before.sources[p] ?? 'default',
       sourceTo: after.sources[p] ?? 'default',
-      ...(needsProcessRestart(p) ? { restart: 'process' as const } : needsRestart(p) ? { restart: 'restart' as const } : {}),
+      ...(restart ? { restart } : {}),
     });
   }
   return out;

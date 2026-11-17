@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { actionPath, blockOf, cameraIds, multiCamera, pickCamera } from '../web/src/lib/cameras';
+import { actionPath, blockOf, cameraIds, cameraRoute, multiCamera, pickCamera, powerPath } from '../web/src/lib/cameras';
 
 const cam = (id: string, online = true) => ({ id, camera: { name: id, online, since: 0 }, intake: { onvif: 'subscribed', since: 0, source: 'onvif', resubscribes: 0 }, stream: { enabled: true, up: true, go2rtcUp: true, lastFrameTs: 1 }, ftp: { enabled: false } });
 const status = (ids: string[]) => ({ version: 'v', camera: cam(ids[0]).camera, intake: cam(ids[0]).intake, stream: cam(ids[0]).stream, ftp: cam(ids[0]).ftp, cameras: ids.map((i) => cam(i, i !== 'cam4')) }) as never;
@@ -27,5 +27,14 @@ describe('camera picker (spec §16 P1)', () => {
     expect(actionPath(status(['cam3', 'cam4']), 'cam4', 'inventory')).toBe('/control/cameras/cam4/actions/inventory');
     expect(actionPath(status(['cam3', 'cam4']), 'gone', 'camera-test')).toBe('/control/cameras/cam3/actions/camera-test');
     expect(actionPath(null, null, 'camera-test')).toBe('/control/actions/camera-test');
+  });
+});
+
+describe("a camera's own route", () => {
+  it('/control/cameras/<id>/<suffix>, the id encoded; the power path for the picked camera, null without one', () => {
+    expect(cameraRoute('a b', 'actions/restart')).toBe('/control/cameras/a%20b/actions/restart');
+    const s = { cameras: [{ id: 'cam3' }, { id: 'cam4' }] } as never;
+    expect(powerPath(s, 'cam4')).toBe('/control/cameras/cam4/power');
+    expect(powerPath(null, null)).toBeNull();
   });
 });

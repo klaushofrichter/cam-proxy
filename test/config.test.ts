@@ -3,7 +3,7 @@ import { cameraConfig, cameraIds } from '../src/config/cameras';
 import { mkdtempSync, writeFileSync, readFileSync, existsSync, mkdirSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { loadConfig, applyOverrides, removeOverride, needsRestart, resetTarget, ConfigError } from '../src/config/load';
+import { loadConfig, applyOverrides, removeOverride, needsRestart, resetTarget, restartKind, restartNeed, ConfigError } from '../src/config/load';
 import { cameraDefaults, DEFAULTS } from '../src/config/defaults';
 import { configJsonSchema, leafAt, leafPaths } from '../src/config/schema';
 
@@ -117,6 +117,11 @@ describe('overrides', () => {
     expect(needsRestart('server.port')).toBe(true);
     expect(needsRestart('sse.pingS')).toBe(false);
     expect(needsRestart('retention.stillsDays')).toBe(false);
+  });
+
+  it('tells which restart applies a setting: a new process wins, then the camera\'s or the host-wide one', () => {
+    const kinds = ['server.port', 'tls.site', 'cameras.x.host', 'cameras.x.baichuanPort', 'ftp.port', 'sse.pingS'].map((p) => [restartKind(p), restartNeed(p)]);
+    expect(kinds).toEqual([['process', 'process'], ['process', 'process'], ['camera', 'restart'], [null, null], ['host', 'restart'], [null, null]]);
   });
 
   it('refuses secrets in overrides like any unknown key', () => {

@@ -3,6 +3,7 @@
 ## Unreleased
 
 - CI (internal): the dependency audit is now two blocking steps. What ships (the production dependencies) has no exceptions. The full audit, development tools included, allows one advisory: picomatch GHSA-fc5q-39xc-vjpf (a slow pattern match, high), which reaches cam-proxy only through the build and test tools (vite, vitest) and has no fixed release yet; Klaus approved it on 2026-11-17. The check fails again once a picomatch release or a fix appears, so the exception gets removed.
+- Internal cleanup (/simplify, 2026-11-17), no visible change. An open Maintenance or Settings page no longer makes the proxy re-read every cams-admin settings backup from disk on each refresh, and the start-up checks read the audit log faster. `GET /control/config` now says `restartScope: process` for a setting only a new process applies (before: `host`).
 
 ## v2026.11.15.1
 

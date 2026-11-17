@@ -2,7 +2,7 @@ import { whoFields, type AuditLog } from '../audit/audit-log';
 import { configChanges, overrideState, type Change } from '../config/changes';
 import type { Config } from '../config/defaults';
 import { translatePath } from '../config/legacy';
-import { ConfigError, configRevision, getPath, needsProcessRestart, needsRestart, planOverrides, planUnset, pruneEmpty, rebuildWith, setPath, writeOverridesFile, type Loaded, type Plan } from '../config/load';
+import { ConfigError, configRevision, getPath, planOverrides, planUnset, pruneEmpty, rebuildWith, restartNeed, setPath, writeOverridesFile, type Loaded, type Plan } from '../config/load';
 import { CONFIG_SCHEMA } from '../config/schema';
 import { configView } from '../config/view';
 import type { OverridesBackups, Backup, PathState } from './backups';
@@ -206,7 +206,7 @@ export function compactView(l: Loaded, running: Config, marks: ReturnType<Overri
     const m = /^cameras\.([^.]+)\./.exec(p);
     if ((m && !cameras.includes(m[1])) || SECRET_PATH.test(p)) continue; // also a moved camera's
     const by = e.by;
-    const r = needsProcessRestart(p) ? 'process' : needsRestart(p) ? 'restart' : null;
+    const r = restartNeed(p);
     paths[p] = { ...(e.value !== undefined ? { v: e.value } : {}), s: e.source, ...(r ? { r } : {}), ...(e.pending ? { p: true, ...(e.next !== undefined ? { n: e.next } : {}) } : {}), ...(by ? { by } : {}) };
   }
   return { revision: configRevision(l), schema: CONFIG_SCHEMA, cameras, omittedCameras: omitted, paths, settable: settableView() };

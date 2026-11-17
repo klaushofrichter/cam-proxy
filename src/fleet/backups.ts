@@ -30,6 +30,10 @@ const valid = (b: unknown, cmdId: string): b is Backup => {
 
 export class OverridesBackups {
   private warned = new Set<string>();
+  // list()'s answer until this class writes or removes a backup: it is the
+  // only writer of these files (one process), and GET /control/config reads
+  // the markers on every Maintenance and Settings refresh.
+  private cached: Backup[] | null = null;
   constructor(
     private readonly dir: string, // <dataDir>/admin
     private readonly now: () => number = Date.now,
@@ -43,6 +47,7 @@ export class OverridesBackups {
 
   save(b: Backup): void {
     writePrivateJson(this.file(b.cmdId), b);
+    this.cached = null;
     this.prune();
   }
 
@@ -64,11 +69,13 @@ export class OverridesBackups {
     const keep = all.filter((b, i) => i < KEEP || newest.has(b.cmdId)).slice(0, HARD_CAP);
     const kept = new Set(keep.map((b) => b.cmdId));
     for (const old of all) if (!kept.has(old.cmdId)) rmSync(this.file(old.cmdId), { force: true });
+    this.cached = keep;
   }
 
   // A backup whose write did not happen after all.
   remove(cmdId: string): void {
     rmSync(this.file(cmdId), { force: true });
+    this.cached = null;
   }
 
   // null: missing, unsafe or invalid (logged once per file).
@@ -91,17 +98,19 @@ export class OverridesBackups {
 
   // Newest first, valid ones only.
   list(): Backup[] {
+    if (this.cached) return [...this.cached];
     let names: string[];
     try {
       names = readdirSync(this.dir);
     } catch {
       return [];
     }
-    return names.flatMap((n) => {
+    this.cached = names.flatMap((n) => {
       const m = FILE.exec(n);
       const b = m ? this.get(m[1]) : null;
       return b ? [b] : [];
     }).sort((a, b) => b.at - a.at || (a.cmdId < b.cmdId ? 1 : -1));
+    return [...this.cached];
   }
 
   markRolledBack(cmdId: string, r: NonNullable<Backup['rolledBack']>): void {
@@ -109,6 +118,7 @@ export class OverridesBackups {
     const b = this.get(cmdId);
     if (!b) throw new Error('no backup');
     writePrivateJson(f, { ...b, rolledBack: r });
+    this.cached = null;
   }
 
   // Per path: the newest not-rolled-back backup whose `after` set it (the

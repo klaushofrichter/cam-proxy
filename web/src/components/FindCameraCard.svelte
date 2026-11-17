@@ -4,6 +4,7 @@
   import { api, ApiError } from '../lib/api';
   import { deviceLabel, foundText, mismatchText, handLine, notAvailableText, useAddressMessage, writtenText, type FindResult, type FoundDevice } from '../lib/find-camera';
   import { readHealth, waitForNewProxy } from '../lib/maintenance';
+  import { PROXY_PROCESS_RESTART } from '../lib/restarts';
   import { lockedWhy, rights } from '../lib/rights';
   import LockedNote from './LockedNote.svelte';
 
@@ -63,7 +64,7 @@
     restarting = 'waiting';
     const postedAt = Date.now();
     try {
-      await api('POST', '/control/actions/restart-proxy');
+      await api('POST', PROXY_PROCESS_RESTART);
     } catch (e) {
       restarting = null;
       message += ` The restart failed (${e instanceof ApiError ? e.message : 'failed'}): use "Restart proxy" on the Maintenance page.`;

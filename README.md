@@ -274,7 +274,8 @@ the new form:
   as before). `restart` with a camera restarts that camera's side and applies
   its pending `cameras.<id>.*` settings; without one it restarts every camera
   side and applies every pending setting (the Settings page's "Restart to
-  apply"; `GET /control/config` says `restartScope`: `camera` or `host`); host actions have no
+  apply"; `GET /control/config` says `restartScope`: `camera`, `host`, or
+  `process` for a setting only a new process applies); host actions have no
   camera route. The admin UI sends them for the camera picked in the top bar.
 - **Host-wide services (phase 2):** what a host has once serves every
   camera.
