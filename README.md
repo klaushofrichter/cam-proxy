@@ -709,9 +709,10 @@ All under `/api/cameras/{cam}/ptz`, with a client or admin token:
   (`ptz-position`) and sent as a `ptz-positions` stream message.
 - **A go ends in focus** on a camera with `ptz.autofocus`. The camera
   refocuses by itself when the position has another zoom, but not when the
-  zoom stays, so the proxy watches the camera after a go (two reads about
-  every 300 ms, up to 20 s) and, once it stands still at the zoom it had
-  before, focuses once; about 4 to 6 s after the go. The go answers at once
+  zoom stays, so the proxy watches the camera after a go (one position read
+  about every 300 ms, up to 20 s) and, once it has moved and stands still (or
+  has not moved at all for 1.5 s, a go to where it already is) at the zoom it
+  had before, focuses once; about 4 to 6 s after the go. The go answers at once
   and does not wait. Any other PTZ request on that camera (move, zoom, focus,
   stop, another go, autofocus) cancels the pending focus.
 - **Errors:** 404 `not_supported` (the camera can't do it) or `not_found`;

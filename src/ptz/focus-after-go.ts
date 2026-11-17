@@ -14,10 +14,18 @@ import type { ReolinkPtz } from '../camera/ptz';
 import { errorMessage, logger } from '../log';
 import type { MoveLease } from './lease';
 
-// Two reads (GetPtzCurPos, GetZoomFocus) per tick; a travel that has not
-// settled after the cap is left alone.
+// One read (GetPtzCurPos: pan, tilt and Zpos) per tick; GetZoomFocus once
+// after settling, for focusAt's scale. A travel that has not settled after
+// the cap is left alone.
 export const GO_FOCUS_TICK_MS = 300;
 export const GO_FOCUS_CAP_MS = 20_000;
+// Settled means two equal readings after the camera has moved away from its
+// first reading, or after it has not moved at all for this long (a go to
+// where it already is). A camera may start moving only after a tick or two
+// (the E1's zoom arrives ~0.9 s after ToPos), and the old position must not
+// read as settled: at another zoom, an autofocus to the old zoom would cut
+// the go short.
+export const GO_FOCUS_STILL_MS = 1500;
 
 export type FocusOutcome = 'focused' | 'self' | 'cancelled' | 'timeout' | 'failed';
 
@@ -58,9 +66,11 @@ export class FocusAfterGo {
 
   private async settle(before: number, mark: number): Promise<FocusOutcome> {
     const { lease, ptz } = this.d;
-    const end = Date.now() + GO_FOCUS_CAP_MS;
+    const start = Date.now();
+    const end = start + GO_FOCUS_CAP_MS;
+    let first: string | undefined;
     let last: string | undefined;
-    let zoom = before;
+    let moved = false;
     try {
       for (;;) {
         await sleep(GO_FOCUS_TICK_MS, undefined, { unref: true });
@@ -69,16 +79,24 @@ export class FocusAfterGo {
         let reading = '';
         const ran = await lease.runIf(mark, async () => {
           const p = await ptz.position();
-          zoom = await ptz.zoomPos();
-          reading = `${p.pan}/${p.tilt}/${zoom}`;
+          reading = `${p.pan}/${p.tilt}/${p.zoom ?? ''}`;
         });
         if (!ran) return 'cancelled';
-        if (reading === last) break;
+        first ??= reading;
+        if (reading !== first) moved = true;
+        if (reading === last && (moved || Date.now() - start >= GO_FOCUS_STILL_MS)) break;
         last = reading;
       }
-      // Another zoom: the camera refocuses by itself.
-      if (zoom !== before) return 'self';
-      return (await lease.runIf(mark, () => ptz.focusAt(zoom))) ? 'focused' : 'cancelled';
+      // Another zoom: the camera refocuses by itself. The zoom is read and
+      // the autofocus sent in one queue turn, so nothing slips in between.
+      let self = false;
+      const ran = await lease.runIf(mark, async () => {
+        const zoom = await ptz.zoomPos();
+        if (zoom !== before) self = true;
+        else await ptz.focusAt(zoom);
+      });
+      if (!ran) return 'cancelled';
+      return self ? 'self' : 'focused';
     } catch (err) {
       logger.info({ cameraId: this.d.cam, err: errorMessage(err) }, 'ptz_go_focus_failed');
       return 'failed';

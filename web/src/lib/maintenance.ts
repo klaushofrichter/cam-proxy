@@ -128,3 +128,15 @@ export function powerResultText(r: PowerCycleOutcome): string {
   return `Camera power-cycle refused by cams-admin${r.reason ? `: ${r.reason}` : ''}`;
 }
 
+
+// The page's follow-along (every 10 s while visible): the log only. The
+// pending-restart lists (GET /control/config) change only with a settings
+// save or a restart, so the page reads them on mount, after a restart and
+// with the top bar's Refresh (code review 2026-11-17). Returns a stop.
+export const MAINTENANCE_POLL_MS = 10_000;
+export function maintenancePoll(loadLog: () => void, visible = () => (globalThis as { document?: { visibilityState?: string } }).document?.visibilityState !== 'hidden'): () => void {
+  const t = setInterval(() => {
+    if (visible()) loadLog();
+  }, MAINTENANCE_POLL_MS);
+  return () => clearInterval(t);
+}
