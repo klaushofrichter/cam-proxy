@@ -128,10 +128,15 @@ describe('Reolink PTZ mapping', () => {
   });
 
   // Measured on the E1 2026-11-14: {PtzCurPos: {channel}} works, a plain {channel} → -1.
-  it('position: GetPtzCurPos with {PtzCurPos: {channel: 0}} → Ppos/Tpos', async () => {
+  it('position: GetPtzCurPos with {PtzCurPos: {channel: 0}} → Ppos/Tpos/Zpos', async () => {
     const { p, sent } = stub(() => ({ PtzCurPos: { Fpos: 511, Ppos: 1128, Tpos: 0, Zpos: 500, channel: 0 } }));
-    expect(await p.position()).toEqual({ pan: 1128, tilt: 0 });
+    expect(await p.position()).toEqual({ pan: 1128, tilt: 0, zoom: 500 });
     expect(sent).toEqual([['GetPtzCurPos', { PtzCurPos: { channel: 0 } }]]);
+  });
+
+  it('position: no Zpos in the answer → pan/tilt only', async () => {
+    const { p } = stub(() => ({ PtzCurPos: { Ppos: 3, Tpos: 4, channel: 0 } }));
+    expect(await p.position()).toEqual({ pan: 3, tilt: 4 });
   });
 
   it('position: no Ppos/Tpos in the answer → an error', async () => {

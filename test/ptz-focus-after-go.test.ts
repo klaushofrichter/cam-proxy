@@ -9,8 +9,9 @@ import { FocusAfterGo, GO_FOCUS_CAP_MS, GO_FOCUS_TICK_MS, type FocusOutcome } fr
 import { MoveLease } from '../src/ptz/lease';
 import { PtzPositions } from '../src/ptz/positions';
 
-// A camera whose pan/tilt/zoom readings follow a script: each tick's
-// GetPtzCurPos and GetZoomFocus take the next entry (the last one repeats).
+// A camera whose pan/tilt/zoom readings follow a script: each GetPtzCurPos
+// takes the next entry (the last one repeats; its zoom stands for Zpos), and
+// GetZoomFocus answers the zoom of the last entry read.
 class FakeCam {
   calls: string[] = [];
   script: Array<{ pan: number; tilt: number; zoom: number }> = [];
@@ -21,18 +22,17 @@ class FakeCam {
   private cur() {
     return this.script[Math.min(this.tick, this.script.length - 1)];
   }
-  async position(): Promise<{ pan: number; tilt: number }> {
+  async position(): Promise<{ pan: number; tilt: number; zoom: number }> {
     this.calls.push('position');
     if (this.failPosition) throw new CameraError('camera_error', 'not exist');
     const c = this.cur();
-    return { pan: c.pan, tilt: c.tilt };
+    this.tick++;
+    return { pan: c.pan, tilt: c.tilt, zoom: c.zoom };
   }
   async zoomPos(): Promise<number> {
     this.calls.push('zoom');
-    if (!this.script.length) return this.zoomNow;
-    const z = this.cur().zoom;
-    this.tick++;
-    return z;
+    if (!this.script.length || this.tick === 0) return this.zoomNow;
+    return this.script[Math.min(this.tick - 1, this.script.length - 1)].zoom;
   }
   async focusAt(zoom: number): Promise<void> {
     this.calls.push(`focus ${zoom}`);
@@ -79,7 +79,7 @@ describe('FocusAfterGo (focus after going to a saved position)', () => {
     const p = go(7);
     await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 4);
     expect(await p).toBe('focused');
-    expect(cam.calls).toEqual(['goto', ...Array(4).fill(['position', 'zoom']).flat(), 'focus 7']);
+    expect(cam.calls).toEqual(['goto', ...Array(4).fill('position'), 'zoom', 'focus 7']);
   });
 
   it('settles at another zoom → the camera refocuses by itself: no autofocus', async () => {
@@ -90,17 +90,27 @@ describe('FocusAfterGo (focus after going to a saved position)', () => {
     expect(cam.calls.filter((c) => c.startsWith('focus'))).toEqual([]);
   });
 
-  it('polls about every 300 ms, two reads per tick, nothing before the first tick', async () => {
+  it('polls about every 300 ms, one read (GetPtzCurPos) per tick, nothing before the first tick', async () => {
     cam.script = [at(1, 0, 7), at(2, 0, 7), at(3, 0, 7), at(3, 0, 7)];
     const p = go(7);
     await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS - 1);
     expect(cam.calls).toEqual(['goto']);
     await vi.advanceTimersByTimeAsync(1);
-    expect(cam.calls).toEqual(['goto', 'position', 'zoom']);
+    expect(cam.calls).toEqual(['goto', 'position']);
     await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS);
-    expect(cam.calls).toEqual(['goto', 'position', 'zoom', 'position', 'zoom']);
+    expect(cam.calls).toEqual(['goto', 'position', 'position']);
     await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 2);
     expect(await p).toBe('focused');
+    // GetZoomFocus (the scale focusAt takes) once, after settling.
+    expect(cam.calls).toEqual(['goto', ...Array(4).fill('position'), 'zoom', 'focus 7']);
+  });
+
+  it('settles on Zpos too: a zoom still travelling at a standing pan/tilt is not settled', async () => {
+    cam.script = [at(3, 0, 7), at(3, 0, 9), at(3, 0, 12), at(3, 0, 12)];
+    const p = go(7);
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 4);
+    expect(await p).toBe('self');
+    expect(cam.calls.filter((c) => c === 'position')).toHaveLength(4);
   });
 
   it.each([
@@ -121,18 +131,18 @@ describe('FocusAfterGo (focus after going to a saved position)', () => {
   });
 
   it('an action queued between the settled reading and the autofocus wins: no autofocus', async () => {
-    cam.script = [at(3, 0, 7)];
-    // The second (settling) read finishes, then a user's move takes the lease
-    // before the autofocus runs.
-    const orig = cam.zoomPos.bind(cam);
+    cam.script = [at(2, 0, 7), at(3, 0, 7)];
+    // The settling read finishes, then a user's move takes the lease before
+    // the autofocus runs.
+    const orig = cam.position.bind(cam);
     let n = 0;
-    cam.zoomPos = async () => {
-      const z = await orig();
-      if (++n === 2) void lease.move(async () => void cam.calls.push('move'), 400);
-      return z;
+    cam.position = async () => {
+      const r = await orig();
+      if (++n === 3) void lease.move(async () => void cam.calls.push('move'), 400);
+      return r;
     };
     const p = go(7);
-    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 3);
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 4);
     expect(await p).toBe('cancelled');
     expect(cam.calls).toContain('move');
     expect(cam.calls.filter((c) => c.startsWith('focus'))).toEqual([]);
@@ -140,7 +150,7 @@ describe('FocusAfterGo (focus after going to a saved position)', () => {
 
   it('gives up quietly at the cap (20 s) when it never settles', async () => {
     let i = 0;
-    cam.position = async () => (cam.calls.push('position'), { pan: i++, tilt: 0 });
+    cam.position = async () => (cam.calls.push('position'), { pan: i++, tilt: 0, zoom: 7 });
     const p = go(7);
     await vi.advanceTimersByTimeAsync(GO_FOCUS_CAP_MS + GO_FOCUS_TICK_MS * 2);
     expect(await p).toBe('timeout');
@@ -187,9 +197,9 @@ describe('PtzPositions.goTo with FocusAfterGo', () => {
     cam.zoomNow = 7;
     await svc.goTo(a.id);
     expect(cam.calls).toEqual(['zoom', 'goto 0']);
-    cam.script = [at(5, 0, 7), at(5, 0, 7)];
-    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 2);
-    expect(cam.calls).toEqual(['zoom', 'goto 0', 'position', 'zoom', 'position', 'zoom', 'focus 7']);
+    cam.script = [at(4, 0, 7), at(5, 0, 7), at(5, 0, 7)];
+    await vi.advanceTimersByTimeAsync(GO_FOCUS_TICK_MS * 3);
+    expect(cam.calls).toEqual(['zoom', 'goto 0', 'position', 'position', 'position', 'zoom', 'focus 7']);
   });
 
   it('a camera without autofocus: no zoom read, no settle, no focus', async () => {

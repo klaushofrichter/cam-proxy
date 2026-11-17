@@ -14,8 +14,9 @@ import type { ReolinkPtz } from '../camera/ptz';
 import { errorMessage, logger } from '../log';
 import type { MoveLease } from './lease';
 
-// Two reads (GetPtzCurPos, GetZoomFocus) per tick; a travel that has not
-// settled after the cap is left alone.
+// One read (GetPtzCurPos: pan, tilt and Zpos) per tick; GetZoomFocus once
+// after settling, for focusAt's scale. A travel that has not settled after
+// the cap is left alone.
 export const GO_FOCUS_TICK_MS = 300;
 export const GO_FOCUS_CAP_MS = 20_000;
 
@@ -60,7 +61,6 @@ export class FocusAfterGo {
     const { lease, ptz } = this.d;
     const end = Date.now() + GO_FOCUS_CAP_MS;
     let last: string | undefined;
-    let zoom = before;
     try {
       for (;;) {
         await sleep(GO_FOCUS_TICK_MS, undefined, { unref: true });
@@ -69,16 +69,22 @@ export class FocusAfterGo {
         let reading = '';
         const ran = await lease.runIf(mark, async () => {
           const p = await ptz.position();
-          zoom = await ptz.zoomPos();
-          reading = `${p.pan}/${p.tilt}/${zoom}`;
+          reading = `${p.pan}/${p.tilt}/${p.zoom ?? ''}`;
         });
         if (!ran) return 'cancelled';
         if (reading === last) break;
         last = reading;
       }
-      // Another zoom: the camera refocuses by itself.
-      if (zoom !== before) return 'self';
-      return (await lease.runIf(mark, () => ptz.focusAt(zoom))) ? 'focused' : 'cancelled';
+      // Another zoom: the camera refocuses by itself. The zoom is read and
+      // the autofocus sent in one queue turn, so nothing slips in between.
+      let self = false;
+      const ran = await lease.runIf(mark, async () => {
+        const zoom = await ptz.zoomPos();
+        if (zoom !== before) self = true;
+        else await ptz.focusAt(zoom);
+      });
+      if (!ran) return 'cancelled';
+      return self ? 'self' : 'focused';
     } catch (err) {
       logger.info({ cameraId: this.d.cam, err: errorMessage(err) }, 'ptz_go_focus_failed');
       return 'failed';
