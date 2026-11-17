@@ -1551,7 +1551,9 @@ npm run schema      # regenerate config.schema.json after changing a setting
   runs the camera's FTP test, waits for a real motion clip and reports it,
   then turns the camera's FTP off. `npx tsx scripts/camera-ftp-off.ts` turns
   it off on its own (after an interrupted run).
-- **CI:** tests, e2e, type checks, `npm audit`, CodeQL, a check that no
+- **CI:** tests, e2e, type checks, `npm audit` (production dependencies
+  without exceptions; all dependencies with the allowlist
+  `.github/audit-allowlist.json`, `scripts/audit-gate.mjs`), CodeQL, a check that no
   media file is committed, and a container smoke test
   (`scripts/container-smoke.sh`, building the image and checking it as the
   cluster runs it). `production` requires `test`, `e2e` and `codeql` (strict,
