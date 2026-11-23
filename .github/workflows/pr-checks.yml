@@ -34,13 +34,13 @@ jobs:
         run: scripts/contract-drift.sh
       # Blocking: what ships (the production image), no exceptions.
       - run: npm audit --omit=dev --audit-level=high
-      # Blocking too: everything, dev dependencies included, at high. The only
-      # exception is the allowlist .github/audit-allowlist.json, by advisory id:
-      # GHSA-fc5q-39xc-vjpf (`picomatch` via vite and vitest, the build and test
-      # tools; no patched release; approved by Klaus 2026-11-17). The gate also
-      # fails when that advisory disappears, changes its range or a new
-      # `picomatch` release appears, so the entry gets removed once it can be
-      # (scripts/audit-gate.mjs, the same gate as cam-sim's).
+      # Blocking too: everything, dev dependencies included, at high. Exceptions
+      # go in the allowlist .github/audit-allowlist.json, by advisory id. It is
+      # empty: the picomatch advisory GHSA-fc5q-39xc-vjpf, allowed on 2026-11-17,
+      # was withdrawn on 2026-11-18. The gate fails when an allowlisted advisory
+      # disappears, changes its range or a new release of its package appears, so
+      # each entry gets removed once it can be (scripts/audit-gate.mjs, the same
+      # gate in all four npm repos).
       - name: npm audit (all dependencies, with the allowlist)
         run: |
           set -euo pipefail
