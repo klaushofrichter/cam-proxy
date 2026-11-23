@@ -55,13 +55,28 @@ const FIXTURES: Record<string, Fixture> = {
   },
 };
 
-const allowlist: Json[] = JSON.parse(readFileSync(ALLOWLIST, 'utf8'));
-const entry = allowlist[0];
 function fixture(id: string): Fixture {
   const f = FIXTURES[id];
   if (!f) throw new Error(`no audit fixture for allowlisted ${id}: add one to FIXTURES`);
   return f;
 }
+
+// This repo's allowlist, which may be empty. The behaviour tests need at least
+// one entry, so with an empty file they run on a sample entry (passed to the
+// gate explicitly), built from a fixture.
+const real: Json[] = JSON.parse(readFileSync(ALLOWLIST, 'utf8'));
+const SAMPLE_ID = 'GHSA-fc5q-39xc-vjpf';
+const sample = {
+  id: SAMPLE_ID,
+  package: FIXTURES[SAMPLE_ID].pkg,
+  range: FIXTURES[SAMPLE_ID].advisory.range,
+  latest: '4.0.7',
+  via: 'test sample',
+  reason: 'test sample',
+  approved: 'test sample',
+};
+const allowlist: Json[] = real.length ? real : [sample];
+const entry = allowlist[0];
 
 // The entries npm audit gives for one advisory: its package and the dependents.
 function entries(f: Fixture, over: Json = {}, fix: unknown = f.fix): Json {
@@ -73,11 +88,11 @@ function entries(f: Fixture, over: Json = {}, fix: unknown = f.fix): Json {
   return out;
 }
 
-// A report as npm audit gives it today: every allowlisted advisory with its
-// dependents. `over` and `fix` change the first allowlisted advisory.
-function report(extra: Json = {}, over: Json = {}, fix?: unknown): Json {
+// A report with every advisory of `list` (default: the tests' allowlist) and its
+// dependents. `over` and `fix` change the first advisory.
+function report(extra: Json = {}, over: Json = {}, fix?: unknown, list: Json[] = allowlist): Json {
   let vulnerabilities: Json = {};
-  allowlist.forEach((e, i) => {
+  list.forEach((e, i) => {
     const f = fixture(e.id);
     vulnerabilities = { ...vulnerabilities, ...(i === 0 ? entries(f, over, fix ?? f.fix) : entries(f)) };
   });
@@ -91,7 +106,9 @@ beforeEach(() => {
   latest = Object.fromEntries(allowlist.map((e) => [e.package, e.latest]));
 });
 
-function run(rep: Json, list?: Json[]) {
+// Runs the gate with `list` as its allowlist, or with this repo's own file
+// (the gate's default path) when `list` is null.
+function run(rep: Json, list: Json[] | null = allowlist) {
   const bin = join(dir, 'bin');
   mkdirSync(bin, { recursive: true });
   // Stub npm: `npm view <pkg> version` prints latest[pkg]; fails when null or unknown.
@@ -115,16 +132,16 @@ function run(rep: Json, list?: Json[]) {
 }
 
 describe('audit gate', () => {
-  it('passes today: the only high advisories are the allowlisted ones', () => {
-    const r = run(report());
-    for (const e of allowlist) expect(r.out).toContain(`allowlisted (high): ${e.id}`);
-    expect(r.out).toContain(`(${allowlist.length} advisories, ${allowlist.length} allowlisted)`);
+  it("passes with this repo's allowlist when its advisories are the only high ones", () => {
+    const r = run(report({}, {}, undefined, real), null);
+    for (const e of real) expect(r.out).toContain(`allowlisted (high): ${e.id}`);
+    expect(r.out).toContain(`(${real.length} advisories, ${real.length} allowlisted)`);
     expect(r.code).toBe(0);
   });
 
   it('allowlists by GHSA id, with the package, range, latest release, reason and approval recorded', () => {
-    expect(allowlist.length).toBeGreaterThan(0);
-    for (const e of allowlist) {
+    expect(Array.isArray(real)).toBe(true);
+    for (const e of real) {
       expect(e.id).toMatch(/^GHSA-[a-z0-9]{4}-[a-z0-9]{4}-[a-z0-9]{4}$/);
       expect(e).toMatchObject({ package: fixture(e.id).pkg, range: fixture(e.id).advisory.range });
       expect(e.latest).toBeTruthy();
