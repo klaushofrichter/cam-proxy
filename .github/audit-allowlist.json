@@ -1,11 +1,1 @@
-[
-  {
-    "id": "GHSA-fc5q-39xc-vjpf",
-    "package": "picomatch",
-    "range": "<=4.0.7",
-    "latest": "4.0.7",
-    "via": "vite/vitest (dev dependencies: the build and test tools)",
-    "reason": "ReDoS through single-branch repeated extglobs; no patched picomatch release exists (4.0.7 is the latest). Reached only through vite, vitest, tinyglobby/fdir and the Svelte plugin, which only build and test; never in the production image; the production audit still blocks it.",
-    "approved": "2026-11-17 by Klaus (in chat)"
-  }
-]
+[]
