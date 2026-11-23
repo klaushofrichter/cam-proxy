@@ -18,6 +18,7 @@ import type { MoveActor, MoveAnswer, MoveBounds, MoveCameraConnection, MoveCopie
 import { HOUR } from '../time-units';
 import { listPositions } from '../catalog/ptz-positions';
 import { leftoverItems, type EnvCleanup, type MoveLeftovers } from './leftovers';
+import { jsonEqual } from '../util/obj';
 
 // The retention a move's plan and purge go by (stills, previews, clips, events).
 export type MoveRetention = Pick<Config['retention'], 'stillsDays' | 'previewsDays' | 'clipsDays' | 'eventsDays'>;
@@ -856,7 +857,7 @@ export class MoveSource {
     // The detail is kept as one line (moveDetail): the page and the audit show it next to the reason.
     const detail = a.detail !== undefined ? moveDetail(a.detail) : undefined;
     const answer: MoveAnswer = { accept: a.accept, ...(a.reason !== undefined ? { reason: a.reason } : {}), ...(detail ? { detail } : {}), ...(a.space !== undefined ? { space: a.space } : {}), ...(a.estimateS !== undefined ? { estimateS: a.estimateS } : {}), ...(a.kinds !== undefined ? { kinds: [...a.kinds] } : {}), ...(a.settingsProposal !== undefined ? { settingsProposal: structuredClone(a.settingsProposal) } : {}) };
-    const same = (x?: MoveAnswer) => JSON.stringify(x) === JSON.stringify(answer);
+    const same = (x?: MoveAnswer) => jsonEqual(x, answer);
     const r = this.d.journal.load(a.moveId);
     if (r) {
       if (r.role !== 'source' || r.requestId !== a.requestId || r.peer.proxyId !== a.target.proxyId) return failed('mismatch');

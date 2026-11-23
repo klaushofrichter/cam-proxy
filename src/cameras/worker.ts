@@ -34,6 +34,7 @@ import { MinuteStore, minuteOf } from '../stills/store';
 import type { Storage } from '../storage';
 import type { StreamLog } from '../stream/log';
 import type { SseHandler } from '../stream/sse';
+import { jsonEqual } from '../util/obj';
 
 export type WorkerPhase = 'idle' | 'starting' | 'ready' | 'restarting' | 'stopped';
 
@@ -308,7 +309,7 @@ export class CameraWorker extends EventEmitter {
       return;
     }
     // Stopped meanwhile: the catalog may be closed already.
-    if (this.phaseNow === 'stopped' || JSON.stringify(next) === JSON.stringify(this.caps)) return;
+    if (this.phaseNow === 'stopped' || jsonEqual(next, this.caps)) return;
     this.caps = next;
     const address = this.cam().host;
     this.toldAddress = address;

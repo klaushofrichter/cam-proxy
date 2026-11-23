@@ -22,6 +22,7 @@ import { bad, notFound } from './respond';
 import { tooSoonDetail } from './actions';
 import { whoOf } from './onboarding-api';
 import { cameraTls } from './client-api';
+import { isObj } from '../util/obj';
 
 export interface CameraCallsDeps {
   cameras: CameraRegistry;
@@ -342,7 +343,7 @@ export function cameraCallsApi(d: CameraCallsDeps): express.Router {
   r.put('/cameras/:cam/light', requireAccess('admin', d.access), async (req, res) => {
     const w = workerOf(res);
     const body = req.body as unknown;
-    const valid = typeof body === 'object' && body !== null && !Array.isArray(body) && Object.keys(body).length === 1 && typeof (body as { on?: unknown }).on === 'boolean';
+    const valid = isObj(body) && Object.keys(body).length === 1 && typeof body.on === 'boolean';
     const want = valid ? (body as { on: boolean }).on : undefined;
     const record = (outcome: 'success' | 'failure', message: string, details: Record<string, unknown>, error?: string) => withCamera(d.audit, w.id).write({
       action: 'camera-light', category: ['configuration'], type: ['change'], outcome, ...who(req, res), message, ...(error ? { error } : {}),

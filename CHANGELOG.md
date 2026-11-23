@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+- Internal cleanup (/simplify, 2026-11-23), no visible change: a few places use the shared helpers (`isObj`/`objOr`/`jsonEqual`, the time units) instead of their own copies, and an unused type is removed.
+
 ## v2026.11.23.1
 
 - CI (internal): the full dependency audit no longer allows the picomatch advisory GHSA-fc5q-39xc-vjpf. GitHub withdrew it on 2026-11-18, so the allowlist is empty and every high advisory blocks again.

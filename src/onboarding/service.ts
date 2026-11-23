@@ -42,6 +42,7 @@ import { onboardingStatus, type OnboardingInput, type OnboardingStatus } from '.
 import { removeLeftoverItems, type RemoveLeftovers } from './remove-leftovers';
 import type { ActionOutcome } from '../api/actions';
 import type { SetupAction, SetupStep } from './setup';
+import { objOr } from '../util/obj';
 
 export type Who = ActionWho;
 
@@ -104,7 +105,6 @@ export interface HostChange {
   plaintext?: true;
 }
 
-export interface AddBody { id?: string; name?: string; host: string; protocol?: 'https' | 'http'; user?: string; password: string; trust?: { fingerprint: string } | { siteCa: true }; ports?: Partial<ProbeInput['ports']>; ftp?: boolean }
 // How long an added camera's worker may take to start.
 const WORKER_WAIT_MS = 10_000;
 // eslint-disable-next-line no-control-regex
@@ -307,7 +307,7 @@ export class OnboardingService {
   // in overrides.json (live, no restart). The profile's camera count refuses
   // an addition beyond it.
   async add(body: unknown, who: Who): Promise<{ status: 201; onboarding: OnboardingStatus; setup?: AddSetup; plaintext?: true } | Refusal> {
-    const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+    const b = objOr(body);
     const bad = (detail: string): Refusal => ({ status: 400, error: 'invalid', detail });
     if (b.id !== undefined && (typeof b.id !== 'string' || !new RegExp(CAMERA_ID).test(b.id))) return bad('id: a camera id (a-z, 0-9, -; at most 32)');
     if (b.name !== undefined && !validName(b.name)) return bad('name: 1 to 64 characters, no control characters');
@@ -610,7 +610,7 @@ export class OnboardingService {
     if (cam0 === undefined && ids.length !== 1) return { status: 400, error: 'camera_required', detail: 'several cameras here: PUT /control/cameras/<id>/host' };
     const cam = cam0 ?? ids[0];
     if (!new RegExp(CAMERA_ID).test(cam)) return { status: 400, error: 'invalid', detail: 'not a camera id' };
-    const b = (typeof body === 'object' && body !== null && !Array.isArray(body) ? body : {}) as Record<string, unknown>;
+    const b = objOr(body);
     const to: unknown = b.host;
     const c = cameraConfig(l.config, cam);
     if (!c) return { status: 404, error: 'not_found' };
