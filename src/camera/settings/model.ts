@@ -1,7 +1,7 @@
 // Typed cams settings <-> Reolink commands. Shapes measured on RLC-1224A
 // firmware v3.2.0.6011 (see docs/reolink-api.md and the Plan 4 camera facts).
 // Pure: no I/O, so every mapping is unit-tested against real replies.
-import { isObj, objOr as obj, type Obj } from '../../util/obj';
+import { isObj, jsonEqual, objOr as obj, type Obj } from '../../util/obj';
 
 export type Schedule = 'on' | 'off' | 'custom';
 export type AiKind = 'person' | 'vehicle' | 'pet';
@@ -310,7 +310,7 @@ export function changedKeys(before: unknown, after: unknown, prefix = ''): strin
     const keys = new Set([...Object.keys(before as Obj), ...Object.keys(after as Obj)]);
     return [...keys].flatMap((k) => changedKeys((before as Obj)[k], (after as Obj)[k], prefix ? `${prefix}.${k}` : k));
   }
-  return JSON.stringify(before) === JSON.stringify(after) ? [] : [prefix];
+  return jsonEqual(before, after) ? [] : [prefix];
 }
 
 // A field counts as saved only if the re-read camera state shows the value

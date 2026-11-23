@@ -5,11 +5,10 @@
 // year, a shift that is no whole hour) is unsupported.
 import type { Config } from '../config/defaults';
 import { dstBounds, type DstRule } from '../camera/time';
+import { HOUR, MINUTE as MIN } from '../time-units';
 
 export interface ZoneRule { stdOffsetMinutes: number; dst: (DstRule & { offsetHours: number }) | null }
 
-const HOUR = 3600_000;
-const MIN = 60_000;
 
 // Whether the runtime knows this IANA zone.
 export function knownZone(zone: string): boolean {
