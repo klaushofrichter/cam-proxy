@@ -2,6 +2,8 @@
 
 ## Unreleased
 
+## v2026.11.23.2
+
 - Internal cleanup (/simplify, 2026-11-23), no visible change: a few places use the shared helpers (`isObj`/`objOr`/`jsonEqual`, the time units) instead of their own copies, and an unused type is removed.
 
 ## v2026.11.23.1
