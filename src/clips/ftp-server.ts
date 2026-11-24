@@ -199,7 +199,7 @@ export class FtpServer extends EventEmitter {
       if (s.closed) return;
       s.closed = true;
       clearTimeout(s.timer);
-      if (s.pasv) (s.pasv.server.close(), this.passiveListeners.delete(s.pasv.server));
+      this.dropPassive(s);
       this.sessionsOpen.delete(s);
     };
     s.end = close;
@@ -405,8 +405,20 @@ export class FtpServer extends EventEmitter {
     }
   }
 
+  // A passive setup dropped unused (a new PASV, a refused STOR, the session's
+  // end): close its listener, and the data socket the camera may already have
+  // connected (it connects right after PASV, before STOR).
+  private dropPassive(s: Session): void {
+    const p = s.pasv;
+    if (!p) return;
+    s.pasv = undefined;
+    p.server.close();
+    this.passiveListeners.delete(p.server);
+    p.conn.then((sock) => sock.destroy(), () => undefined);
+  }
+
   private async passive(s: Session, cmd: string, reply: (l: string) => void): Promise<void> {
-    if (s.pasv) (s.pasv.server.close(), this.passiveListeners.delete(s.pasv.server));
+    this.dropPassive(s);
     const [lo, hi] = this.o.passive;
     let server: net.Server | undefined;
     let port = 0;
@@ -457,9 +469,9 @@ export class FtpServer extends EventEmitter {
     if (!path || path === '/') return reply('550 Invalid path');
     if (!s.pasv) return reply('425 Use PASV first');
     if (this.o.tls && s.prot !== 'P') return reply('521 PROT P required');
+    if (this.o.accept && !this.o.accept()) return (this.dropPassive(s), reply('452 Insufficient storage'));
     const pasv = s.pasv;
     s.pasv = undefined;
-    if (this.o.accept && !this.o.accept()) return reply('452 Insufficient storage');
     reply('150 Ok to send data');
     s.busy = true;
     this.arm(s);

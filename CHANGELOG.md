@@ -2,6 +2,10 @@
 
 ## Unreleased
 
+- FTP: a clip refused while the disk is full (452), a repeated PASV, or a session that ends before its upload no longer leaves the camera's data connection and passive port open. Several cameras retrying every clip on a full disk no longer pile up idle connections.
+
+## v2026.11.23.2
+
 - Internal cleanup (/simplify, 2026-11-23), no visible change: a few places use the shared helpers (`isObj`/`objOr`/`jsonEqual`, the time units) instead of their own copies, and an unused type is removed.
 
 ## v2026.11.23.1
