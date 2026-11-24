@@ -395,6 +395,53 @@ describe('FTP server: deferred minors (#5)', () => {
     await c.uploadFrom(Readable.from([Buffer.from('x')]), 'b.mp4');
     await until(() => uploads.length === 1);
   });
+
+  // The camera connects the data socket right after PASV, before STOR: a
+  // passive setup dropped unused must not leave that socket open.
+  async function connectData(raw: Awaited<ReturnType<typeof rawSession>>) {
+    const m = /\((?:\d+,){4}(\d+),(\d+)\)/.exec(await raw.send('PASV'))!;
+    const data = net.connect(Number(m[1]) * 256 + Number(m[2]), '127.0.0.1');
+    data.on('error', () => undefined);
+    data.resume(); // read, so the server's close arrives
+    await new Promise((r) => data.once('connect', r));
+    const closed = new Promise<boolean>((r) => {
+      data.once('close', () => r(true));
+      setTimeout(() => r(false), 2000).unref();
+    });
+    return { closed }; // not awaited here: the caller acts first
+  }
+
+  it('a STOR refused for storage (452) closes the data connection the camera already opened', async () => {
+    const { port } = await setup({ accept: () => false });
+    const raw = await rawSession(port);
+    await raw.send('USER camera');
+    expect(await raw.send('PASS ftp-pw')).toMatch(/^230/);
+    const { closed } = await connectData(raw);
+    expect(await raw.send('STOR a.mp4')).toMatch(/^452/);
+    expect(await closed).toBe(true);
+    raw.close();
+  });
+
+  it('a second PASV closes the data connection the first one already accepted', async () => {
+    const { port } = await setup();
+    const raw = await rawSession(port);
+    await raw.send('USER camera');
+    expect(await raw.send('PASS ftp-pw')).toMatch(/^230/);
+    const { closed } = await connectData(raw);
+    expect(await raw.send('PASV')).toMatch(/^227/);
+    expect(await closed).toBe(true);
+    raw.close();
+  });
+
+  it('a session that ends after PASV closes the data connection it accepted', async () => {
+    const { port } = await setup();
+    const raw = await rawSession(port);
+    await raw.send('USER camera');
+    expect(await raw.send('PASS ftp-pw')).toMatch(/^230/);
+    const { closed } = await connectData(raw);
+    raw.close();
+    expect(await closed).toBe(true);
+  });
 });
 
 async function until(cond: () => boolean, ms = 5000): Promise<void> {
